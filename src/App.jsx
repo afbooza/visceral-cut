@@ -110,6 +110,8 @@ export default function App() {
   const [warmupDone, setWarmupDone] = useState(false);
   const [checkin, setCheckin] = useState({ hrv: "", bodyBattery: "", rhrDelta: "" });
   const [checkinSaved, setCheckinSaved] = useState(false);
+  const [editingLog, setEditingLog] = useState(null);
+  const [editingReadiness, setEditingReadiness] = useState(null);
 
   useEffect(() => {
     try {
@@ -191,7 +193,7 @@ export default function App() {
       {/* Top bar */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#0e0e0e", borderBottom: "1px solid #1e1e1e", padding: "env(safe-area-inset-top) 20px 12px", paddingTop: `max(env(safe-area-inset-top), 12px)` }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: "0.1em", color: "#c8f060" }}>
-          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : "VISCERAL CUT"}
+          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : view === "edit-readiness" ? "EDIT READINESS" : "VISCERAL CUT"}
         </div>
       </div>
 
@@ -356,6 +358,10 @@ export default function App() {
                         {r.bodyBattery && <span style={{ fontSize: 11, color: "#555" }}>BB {r.bodyBattery}</span>}
                         {r.rhrDelta !== "" && <span style={{ fontSize: 11, color: "#555" }}>RHR {r.rhrDelta > 0 ? "+" : ""}{r.rhrDelta}</span>}
                         {s && <span style={{ fontSize: 12, color, fontWeight: 500 }}>{s.pct}%</span>}
+                        <button className="btn btn-ghost" style={{ fontSize: 10, padding: "4px 10px" }} onClick={() => {
+                          setEditingReadiness({ dateKey: date, entry: r, editDate: date, editHrv: r.hrv || "", editBB: r.bodyBattery || "", editRHR: r.rhrDelta !== undefined ? String(r.rhrDelta) : "" });
+                          setView("edit-readiness");
+                        }}>Edit</button>
                       </div>
                     </div>
                   );
@@ -422,6 +428,136 @@ export default function App() {
           </div>
         )}
 
+        {/* EDIT SESSION */}
+        {view === "edit-session" && editingLog && (() => {
+          const logType = editingLog.log.type;
+          return (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <button className="btn btn-ghost" style={{ fontSize: 12, padding: "8px 12px" }} onClick={() => { setView("history"); setEditingLog(null); }}>← Back</button>
+                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: "#c8f060", marginLeft: "auto" }}>{logType}</span>
+              </div>
+
+              <div className="card" style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>DATE</div>
+                <input type="date" value={editingLog.editDate}
+                  onChange={e => setEditingLog(prev => ({ ...prev, editDate: e.target.value }))}
+                  style={{ colorScheme: "dark" }} />
+              </div>
+
+              {WORKOUTS[logType].map((ex, exIdx) => (
+                <div key={exIdx} className="card" style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>{ex.name}</div>
+                      {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}</div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr", gap: 6, marginBottom: 6 }}>
+                    <div /><div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>LBS</div>
+                    <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>REPS</div>
+                  </div>
+                  {Array.from({ length: ex.sets }).map((_, setIdx) => (
+                    <div key={setIdx} style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr", gap: 6, marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, color: "#555", textAlign: "center", paddingTop: 10 }}>{setIdx + 1}</div>
+                      <input type="number" inputMode="decimal" placeholder="lbs" value={editingLog.editData[exIdx]?.[setIdx]?.weight || ""}
+                        onChange={e => setEditingLog(prev => {
+                          const d = { ...prev.editData };
+                          d[exIdx] = d[exIdx].map((s, i) => i === setIdx ? { ...s, weight: e.target.value } : s);
+                          return { ...prev, editData: d };
+                        })} style={{ textAlign: "center" }} />
+                      <input type="number" inputMode="numeric" placeholder="reps" value={editingLog.editData[exIdx]?.[setIdx]?.reps || ""}
+                        onChange={e => setEditingLog(prev => {
+                          const d = { ...prev.editData };
+                          d[exIdx] = d[exIdx].map((s, i) => i === setIdx ? { ...s, reps: e.target.value } : s);
+                          return { ...prev, editData: d };
+                        })} style={{ textAlign: "center" }} />
+                    </div>
+                  ))}
+                </div>
+              ))}
+
+              <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 4 }} onClick={() => {
+                const nl = { ...logs };
+                if (editingLog.editDate !== editingLog.dateKey) delete nl[editingLog.dateKey];
+                nl[editingLog.editDate] = { type: logType, data: editingLog.editData, ts: editingLog.log.ts };
+                setLogs(nl); persist(nl, readiness); setEditingLog(null); setView("history");
+              }}>Save Changes</button>
+
+              <button className="btn btn-ghost" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 8, color: "#f06060", borderColor: "#3a1a1a" }} onClick={() => {
+                if (confirm("Delete this session?")) {
+                  const nl = { ...logs };
+                  delete nl[editingLog.dateKey];
+                  setLogs(nl); persist(nl, readiness); setEditingLog(null); setView("history");
+                }
+              }}>Delete Session</button>
+            </div>
+          );
+        })()}
+
+        {/* EDIT READINESS */}
+        {view === "edit-readiness" && editingReadiness && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: "8px 12px" }} onClick={() => { setView("readiness"); setEditingReadiness(null); }}>← Back</button>
+            </div>
+
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>DATE</div>
+              <input type="date" value={editingReadiness.editDate}
+                onChange={e => setEditingReadiness(prev => ({ ...prev, editDate: e.target.value }))}
+                style={{ colorScheme: "dark" }} />
+            </div>
+
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>HRV STATUS</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {HRV_OPTIONS.map(opt => (
+                  <button key={opt} className="hrv-pill" onClick={() => setEditingReadiness(prev => ({ ...prev, editHrv: opt }))}
+                    style={{ borderColor: editingReadiness.editHrv === opt ? HRV_COLORS[opt] : "#2a2a2a", color: editingReadiness.editHrv === opt ? HRV_COLORS[opt] : "#666", background: editingReadiness.editHrv === opt ? HRV_COLORS[opt] + "15" : "#1a1a1a" }}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>BODY BATTERY ON WAKE <span style={{ color: "#444", fontSize: 10 }}>— 0–100</span></div>
+              <input type="number" min={0} max={100} placeholder="e.g. 72" value={editingReadiness.editBB}
+                onChange={e => setEditingReadiness(prev => ({ ...prev, editBB: e.target.value }))} />
+            </div>
+
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>RHR vs 7-DAY AVG <span style={{ color: "#444", fontSize: 10 }}>— bpm delta</span></div>
+              <input type="number" placeholder="e.g. +3 or -1" value={editingReadiness.editRHR}
+                onChange={e => setEditingReadiness(prev => ({ ...prev, editRHR: e.target.value }))} />
+            </div>
+
+            {(() => { const p = getReadinessScore({ hrv: editingReadiness.editHrv, bodyBattery: editingReadiness.editBB, rhrDelta: editingReadiness.editRHR }); return p ? (
+              <div className="card" style={{ marginBottom: 14, borderColor: p.pct >= 70 ? "#2a3a1a" : p.pct >= 40 ? "#3a2a10" : "#3a1a1a" }}>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 10 }}>PREVIEW</div>
+                <ReadinessGauge pct={p.pct} flags={p.flags} />
+              </div>
+            ) : null; })()}
+
+            <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 4 }} onClick={() => {
+              const nr = { ...readiness };
+              if (editingReadiness.editDate !== editingReadiness.dateKey) delete nr[editingReadiness.dateKey];
+              nr[editingReadiness.editDate] = { hrv: editingReadiness.editHrv, bodyBattery: editingReadiness.editBB, rhrDelta: editingReadiness.editRHR, ts: editingReadiness.entry.ts };
+              setReadiness(nr); persist(logs, nr); setEditingReadiness(null); setView("readiness");
+            }}>Save Changes</button>
+
+            <button className="btn btn-ghost" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 8, color: "#f06060", borderColor: "#3a1a1a" }} onClick={() => {
+              if (confirm("Delete this readiness entry?")) {
+                const nr = { ...readiness };
+                delete nr[editingReadiness.dateKey];
+                setReadiness(nr); persist(logs, nr); setEditingReadiness(null); setView("readiness");
+              }
+            }}>Delete Entry</button>
+          </div>
+        )}
+
         {/* HISTORY */}
         {view === "history" && (
           <div>
@@ -436,7 +572,17 @@ export default function App() {
                       <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: "#c8f060", marginRight: 8 }}>{log.type}</span>
                       <span style={{ fontSize: 11, color: "#555" }}>{new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</span>
                     </div>
-                    {rs && <span style={{ fontSize: 11, color: rs.pct >= 70 ? "#c8f060" : rs.pct >= 40 ? "#f0a040" : "#f06060" }}>{rs.pct}% ready</span>}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {rs && <span style={{ fontSize: 11, color: rs.pct >= 70 ? "#c8f060" : rs.pct >= 40 ? "#f0a040" : "#f06060" }}>{rs.pct}% ready</span>}
+                      <button className="btn btn-ghost" style={{ fontSize: 10, padding: "4px 10px" }} onClick={() => {
+                        const editData = {};
+                        WORKOUTS[log.type].forEach((ex, i) => {
+                          editData[i] = log.data?.[i] ? log.data[i].map(s => ({ ...s })) : Array.from({ length: ex.sets }, () => ({ weight: "", reps: "" }));
+                        });
+                        setEditingLog({ dateKey: date, log, editDate: date, editData });
+                        setView("edit-session");
+                      }}>Edit</button>
+                    </div>
                   </div>
                   {WORKOUTS[log.type].map((ex, exIdx) => {
                     const sets = log.data?.[exIdx]?.filter(s => s.weight || s.reps) || [];
@@ -496,8 +642,8 @@ export default function App() {
       {/* Bottom Nav */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#0e0e0e", borderTop: "1px solid #1e1e1e", display: "flex", paddingBottom: "env(safe-area-inset-bottom)", zIndex: 100 }}>
         {[["dashboard","⊞","Home"],["readiness","◎","Ready"],["history","≡","Log"],["schedule","▦","Plan"]].map(([v, icon, label]) => (
-          <button key={v} className={`nav-btn ${view === v || (view === "session" && v === "dashboard") ? "active" : ""}`}
-            onClick={() => { if (v === "dashboard" && view === "session") { setView("dashboard"); setActiveSession(null); } else setView(v); }}>
+          <button key={v} className={`nav-btn ${view === v || (view === "session" && v === "dashboard") || (view === "edit-session" && v === "history") || (view === "edit-readiness" && v === "readiness") ? "active" : ""}`}
+            onClick={() => { if (v === "dashboard" && view === "session") { setView("dashboard"); setActiveSession(null); } else if (view === "edit-session" || view === "edit-readiness") { setEditingLog(null); setEditingReadiness(null); setView(v); } else setView(v); }}>
             <span className="nav-icon">{icon}</span>
             {label}
           </button>
