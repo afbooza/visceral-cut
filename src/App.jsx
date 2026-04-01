@@ -268,7 +268,7 @@ export default function App() {
                   <div key={date} className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", marginBottom: 8 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: "#c8f060" }}>{log.type}</div>
-                      <div style={{ fontSize: 11, color: "#555" }}>{new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div>
+                      <div style={{ fontSize: 11, color: "#555" }}>{new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div>
                     </div>
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       {rs && <span style={{ fontSize: 11, color: rs.pct >= 70 ? "#c8f060" : rs.pct >= 40 ? "#f0a040" : "#f06060" }}>{rs.pct}%</span>}
@@ -352,7 +352,7 @@ export default function App() {
                   const color = s?.pct >= 70 ? "#c8f060" : s?.pct >= 40 ? "#f0a040" : "#f06060";
                   return (
                     <div key={date} className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", marginBottom: 8 }}>
-                      <div style={{ fontSize: 12, color: "#666" }}>{new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div>
+                      <div style={{ fontSize: 12, color: "#666" }}>{new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div>
                       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                         {r.hrv && <span style={{ fontSize: 11, color: HRV_COLORS[r.hrv] }}>{r.hrv}</span>}
                         {r.bodyBattery && <span style={{ fontSize: 11, color: "#555" }}>BB {r.bodyBattery}</span>}
@@ -570,7 +570,7 @@ export default function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <div>
                       <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: "#c8f060", marginRight: 8 }}>{log.type}</span>
-                      <span style={{ fontSize: 11, color: "#555" }}>{new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</span>
+                      <span style={{ fontSize: 11, color: "#555" }}>{new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</span>
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       {rs && <span style={{ fontSize: 11, color: rs.pct >= 70 ? "#c8f060" : rs.pct >= 40 ? "#f0a040" : "#f06060" }}>{rs.pct}% ready</span>}
