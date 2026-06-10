@@ -19,6 +19,12 @@ const WARMUPS = {
     { name: "Leg swings (front/back + lateral)", duration: "10 each" },
     { name: "Glute bridge", duration: "2x15" },
   ],
+  Core: [
+    { name: "Cat-cow", duration: "1 min" },
+    { name: "Dead bug", duration: "2x10" },
+    { name: "Bird dog", duration: "2x10 ea" },
+    { name: "Hollow hold", duration: "2x20 sec" },
+  ],
 };
 
 const WORKOUTS = {
@@ -26,22 +32,30 @@ const WORKOUTS = {
     { name: "DB Floor Press", sets: 4, reps: "8-10", note: "Heavy, controlled descent" },
     { name: "DB Overhead Press", sets: 3, reps: "10", note: "Strict, no leg drive" },
     { name: "DB Lateral Raise", sets: 3, reps: "15", note: "Slow eccentric" },
-    { name: "Push-up", sets: 2, reps: "AMRAP", note: "Weighted if easy" },
-    { name: "DB Skull Crusher", sets: 3, reps: "12", note: "" },
+    { name: "Push-up", sets: 2, reps: "AMRAP", note: "Bodyweight finisher — slow eccentric if easy", type: "bodyweight" },
+    { name: "Dips", sets: 3, reps: "8-12", note: "Lean forward for chest, upright for tricep focus" },
   ],
   Pull: [
     { name: "DB Bent-Over Row", sets: 4, reps: "8-10", note: "Brace hard, hip hinge" },
     { name: "DB Single-Arm Row", sets: 3, reps: "10 ea", note: "Full ROM stretch" },
-    { name: "DB Rear Delt Fly", sets: 3, reps: "15", note: "Light, elbows high" },
+    { name: "Banded Rear Delt Fly", sets: 3, reps: "15", note: "Light band tension, elbows high" },
     { name: "DB Alternating Curl", sets: 3, reps: "12", note: "Supinate at top" },
-    { name: "Inverted Row", sets: 3, reps: "AMRAP", note: "Bodyweight finisher" },
+    { name: "Inverted Row", sets: 3, reps: "AMRAP", note: "Bodyweight finisher", type: "bodyweight" },
+    { name: "Back Extension", sets: 3, reps: "12", note: "Hyper Pro — erectors/glutes, hold DB at chest for load" },
   ],
   Legs: [
     { name: "DB Romanian Deadlift", sets: 4, reps: "10", note: "Hamstring focus" },
     { name: "DB Goblet Squat", sets: 3, reps: "12", note: "Heels elevated if needed" },
-    { name: "DB Reverse Lunge", sets: 3, reps: "10 ea", note: "Single-leg stability" },
-    { name: "DB Hip Thrust (floor)", sets: 3, reps: "15", note: "Glute activation" },
-    { name: "DB Step-Up", sets: 2, reps: "12 ea", note: "Use chair or couch" },
+    { name: "Leg Extension", sets: 3, reps: "12", note: "Leg Developer — quad isolation, 2-sec squeeze at top" },
+    { name: "Lying Leg Curl", sets: 3, reps: "12", note: "Leg Developer — hamstring isolation, slow eccentric" },
+    { name: "Glute-Ham Raise", sets: 3, reps: "8", note: "GHD — full ROM, assist with hands if needed", type: "bodyweight" },
+  ],
+  Core: [
+    { name: "GHD Sit-Up", sets: 3, reps: "12", note: "GHD — full extension to flexion, hands at chest", type: "bodyweight" },
+    { name: "Reverse Hyper", sets: 3, reps: "12", note: "Hyper Pro — controlled, no swing, squeeze glutes", type: "bodyweight" },
+    { name: "Hanging Leg Raise", sets: 3, reps: "10", note: "Lying leg raise if no bar — straight legs to 90°", type: "bodyweight" },
+    { name: "DB Russian Twist", sets: 3, reps: "20 ea", note: "Slow, rotate from torso not arms" },
+    { name: "Plank", sets: 3, reps: "45", note: "Hold position, slight ribs-down tuck", type: "time" },
   ],
 };
 
@@ -52,7 +66,7 @@ const WEEK_TEMPLATE = [
   { day: "Thu", session: "Easy / Rest", type: "rest" },
   { day: "Fri", session: "Legs", type: "lift" },
   { day: "Sat", session: "Snowboard / Trail", type: "cardio" },
-  { day: "Sun", session: "Rest / Prep", type: "rest" },
+  { day: "Sun", session: "Core", type: "lift" },
 ];
 
 const HRV_OPTIONS = ["Balanced", "Low", "Unbalanced", "Poor"];
@@ -70,6 +84,19 @@ function getReadinessScore(checkin) {
   const delta = parseInt(checkin.rhrDelta);
   if (!isNaN(delta)) { if (delta <= 0) score += 2; else if (delta <= 3) score += 1; else flags++; }
   return { pct: Math.round((score / 6) * 100), flags };
+}
+
+function formatPrev(prev, type) {
+  if (!prev) return "—";
+  if (type === "bodyweight") return prev.reps || "—";
+  if (type === "time") return prev.reps ? `${prev.reps}s` : "—";
+  return prev.weight ? `${prev.weight}×${prev.reps}` : "—";
+}
+
+function formatSet(s, type) {
+  if (type === "bodyweight") return s.reps ? `BW×${s.reps}` : "";
+  if (type === "time") return s.reps ? `${s.reps}s` : "";
+  return `${s.weight ? `${s.weight}lbs` : ""}${s.weight && s.reps ? "×" : ""}${s.reps || ""}`;
 }
 
 function ReadinessGauge({ pct, flags }) {
@@ -244,13 +271,14 @@ export default function App() {
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>START SESSION</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                {["Push", "Pull", "Legs"].map(type => {
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {["Push", "Pull", "Legs", "Core"].map(type => {
                   const last = getLastLog(type);
+                  const subtitle = { Push: "Chest·Shoulder·Tri", Pull: "Back·Bi·Rear Delt", Legs: "Quads·Hams·Glutes", Core: "Abs·Obliques·Lower Back" }[type];
                   return (
                     <button key={type} className="session-btn" onClick={() => startSession(type)}>
                       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: "#c8f060", marginBottom: 2 }}>{type}</div>
-                      <div style={{ fontSize: 9, color: "#555", marginBottom: 6 }}>{type === "Push" ? "Chest·Shoulder·Tri" : type === "Pull" ? "Back·Bi·Rear Delt" : "Quads·Hams·Glutes"}</div>
+                      <div style={{ fontSize: 9, color: "#555", marginBottom: 6 }}>{subtitle}</div>
                       <div style={{ fontSize: 9, color: "#444" }}>{last ? `${new Date(last.ts).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : "Not started"}</div>
                     </button>
                   );
@@ -394,6 +422,10 @@ export default function App() {
 
             {warmupDone && WORKOUTS[activeSession].map((ex, exIdx) => {
               const lastSets = getLastLog(activeSession)?.data?.[exIdx] || [];
+              const hideWeight = ex.type === "bodyweight" || ex.type === "time";
+              const repLabel = ex.type === "time" ? "SEC" : "REPS";
+              const repPh = ex.type === "time" ? "sec" : "reps";
+              const gridCols = hideWeight ? "24px 1fr 64px" : "24px 1fr 1fr 64px";
               return (
                 <div key={exIdx} className="card" style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
@@ -401,23 +433,26 @@ export default function App() {
                       <div style={{ fontSize: 14, fontWeight: 500 }}>{ex.name}</div>
                       {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
                     </div>
-                    <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}</div>
+                    <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}{ex.type === "time" ? "s" : ""}</div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr 64px", gap: 6, marginBottom: 6 }}>
-                    <div /><div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>LBS</div>
-                    <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>REPS</div>
+                  <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
+                    <div />
+                    {!hideWeight && <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>LBS</div>}
+                    <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>{repLabel}</div>
                     <div style={{ fontSize: 10, color: "#444", textAlign: "center" }}>PREV</div>
                   </div>
                   {Array.from({ length: ex.sets }).map((_, setIdx) => {
                     const prev = lastSets[setIdx];
                     return (
-                      <div key={setIdx} style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr 64px", gap: 6, marginBottom: 8 }}>
+                      <div key={setIdx} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 8 }}>
                         <div style={{ fontSize: 11, color: "#555", textAlign: "center", paddingTop: 10 }}>{setIdx + 1}</div>
-                        <input type="number" inputMode="decimal" placeholder="lbs" value={sessionData[exIdx]?.[setIdx]?.weight || ""}
-                          onChange={e => updateSet(exIdx, setIdx, "weight", e.target.value)} style={{ textAlign: "center" }} />
-                        <input type="number" inputMode="numeric" placeholder="reps" value={sessionData[exIdx]?.[setIdx]?.reps || ""}
+                        {!hideWeight && (
+                          <input type="number" inputMode="decimal" placeholder="lbs" value={sessionData[exIdx]?.[setIdx]?.weight || ""}
+                            onChange={e => updateSet(exIdx, setIdx, "weight", e.target.value)} style={{ textAlign: "center" }} />
+                        )}
+                        <input type="number" inputMode="numeric" placeholder={repPh} value={sessionData[exIdx]?.[setIdx]?.reps || ""}
                           onChange={e => updateSet(exIdx, setIdx, "reps", e.target.value)} style={{ textAlign: "center" }} />
-                        <div style={{ fontSize: 11, color: "#444", textAlign: "center", paddingTop: 10 }}>{prev?.weight ? `${prev.weight}×${prev.reps}` : "—"}</div>
+                        <div style={{ fontSize: 11, color: "#444", textAlign: "center", paddingTop: 10 }}>{formatPrev(prev, ex.type)}</div>
                       </div>
                     );
                   })}
@@ -445,38 +480,47 @@ export default function App() {
                   style={{ colorScheme: "dark" }} />
               </div>
 
-              {WORKOUTS[logType].map((ex, exIdx) => (
-                <div key={exIdx} className="card" style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 500 }}>{ex.name}</div>
-                      {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
+              {WORKOUTS[logType].map((ex, exIdx) => {
+                const hideWeight = ex.type === "bodyweight" || ex.type === "time";
+                const repLabel = ex.type === "time" ? "SEC" : "REPS";
+                const repPh = ex.type === "time" ? "sec" : "reps";
+                const gridCols = hideWeight ? "24px 1fr" : "24px 1fr 1fr";
+                return (
+                  <div key={exIdx} className="card" style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 500 }}>{ex.name}</div>
+                        {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}{ex.type === "time" ? "s" : ""}</div>
                     </div>
-                    <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}</div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr", gap: 6, marginBottom: 6 }}>
-                    <div /><div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>LBS</div>
-                    <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>REPS</div>
-                  </div>
-                  {Array.from({ length: ex.sets }).map((_, setIdx) => (
-                    <div key={setIdx} style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr", gap: 6, marginBottom: 8 }}>
-                      <div style={{ fontSize: 11, color: "#555", textAlign: "center", paddingTop: 10 }}>{setIdx + 1}</div>
-                      <input type="number" inputMode="decimal" placeholder="lbs" value={editingLog.editData[exIdx]?.[setIdx]?.weight || ""}
-                        onChange={e => setEditingLog(prev => {
-                          const d = { ...prev.editData };
-                          d[exIdx] = d[exIdx].map((s, i) => i === setIdx ? { ...s, weight: e.target.value } : s);
-                          return { ...prev, editData: d };
-                        })} style={{ textAlign: "center" }} />
-                      <input type="number" inputMode="numeric" placeholder="reps" value={editingLog.editData[exIdx]?.[setIdx]?.reps || ""}
-                        onChange={e => setEditingLog(prev => {
-                          const d = { ...prev.editData };
-                          d[exIdx] = d[exIdx].map((s, i) => i === setIdx ? { ...s, reps: e.target.value } : s);
-                          return { ...prev, editData: d };
-                        })} style={{ textAlign: "center" }} />
+                    <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
+                      <div />
+                      {!hideWeight && <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>LBS</div>}
+                      <div style={{ fontSize: 10, color: "#555", textAlign: "center" }}>{repLabel}</div>
                     </div>
-                  ))}
-                </div>
-              ))}
+                    {Array.from({ length: ex.sets }).map((_, setIdx) => (
+                      <div key={setIdx} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 8 }}>
+                        <div style={{ fontSize: 11, color: "#555", textAlign: "center", paddingTop: 10 }}>{setIdx + 1}</div>
+                        {!hideWeight && (
+                          <input type="number" inputMode="decimal" placeholder="lbs" value={editingLog.editData[exIdx]?.[setIdx]?.weight || ""}
+                            onChange={e => setEditingLog(prev => {
+                              const d = { ...prev.editData };
+                              d[exIdx] = d[exIdx].map((s, i) => i === setIdx ? { ...s, weight: e.target.value } : s);
+                              return { ...prev, editData: d };
+                            })} style={{ textAlign: "center" }} />
+                        )}
+                        <input type="number" inputMode="numeric" placeholder={repPh} value={editingLog.editData[exIdx]?.[setIdx]?.reps || ""}
+                          onChange={e => setEditingLog(prev => {
+                            const d = { ...prev.editData };
+                            d[exIdx] = d[exIdx].map((s, i) => i === setIdx ? { ...s, reps: e.target.value } : s);
+                            return { ...prev, editData: d };
+                          })} style={{ textAlign: "center" }} />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
 
               <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 4 }} onClick={() => {
                 const nl = { ...logs };
@@ -593,7 +637,7 @@ export default function App() {
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           {sets.map((s, i) => (
                             <span key={i} style={{ fontSize: 11, background: "#1a1a1a", padding: "2px 8px", borderRadius: 3, color: "#c8f060" }}>
-                              {s.weight ? `${s.weight}lbs` : ""}{s.weight && s.reps ? "×" : ""}{s.reps || ""}
+                              {formatSet(s, ex.type)}
                             </span>
                           ))}
                         </div>
