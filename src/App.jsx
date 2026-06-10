@@ -128,16 +128,20 @@ export default function App() {
     return m.length ? m[0][1] : null;
   };
 
-  const last7 = Array.from({ length: 7 }).map((_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (6 - i));
-    const key = d.toISOString().split("T")[0];
-    return {
-      key,
-      day: d.toLocaleDateString("en-US", { weekday: "short" }),
-      date: `${d.getMonth() + 1}/${d.getDate()}`,
-      log: logs[key],
-    };
-  });
+  const week = (() => {
+    const today = new Date();
+    const mondayOffset = -((today.getDay() + 6) % 7);
+    return Array.from({ length: 7 }).map((_, i) => {
+      const d = new Date(); d.setDate(d.getDate() + mondayOffset + i);
+      const key = d.toISOString().split("T")[0];
+      return {
+        key,
+        day: d.toLocaleDateString("en-US", { weekday: "short" }),
+        date: `${d.getMonth() + 1}/${d.getDate()}`,
+        log: logs[key],
+      };
+    });
+  })();
 
   const typeBg = t => t === "lift" ? "rgba(200,240,96,0.08)" : t === "cardio" ? "rgba(96,200,240,0.08)" : "transparent";
 
@@ -180,7 +184,7 @@ export default function App() {
             <div style={{ marginBottom: 18 }}>
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>THIS WEEK</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
-                {last7.map(({ key, day, date, log }) => {
+                {week.map(({ key, day, date, log }) => {
                   const isToday = key === todayKey();
                   const color = log ? (TYPE_COLORS[log.type] || "#c8f060") : "#2a2a2a";
                   return (
