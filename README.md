@@ -1,5 +1,7 @@
 # Visceral Cut — PWA Deploy Guide
 
+**Live app:** https://visceral-cut.vercel.app/
+
 ## Deploy to Vercel (free, ~5 min)
 
 ### Step 1 — Push to GitHub
