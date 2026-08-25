@@ -92,6 +92,11 @@ function readLocal() {
   return { logs, draft };
 }
 
+// YYYY-MM-DD in the device's local timezone (toISOString is UTC — after 5-6pm MT it rolls to tomorrow)
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function formatPrev(prev, type) {
   if (!prev) return "—";
   if (type === "bodyweight") return prev.reps || "—";
@@ -125,7 +130,7 @@ export default function App() {
   }, []);
 
   const persist = (l) => localStorage.setItem(STORAGE_KEY, JSON.stringify({ logs: l }));
-  const todayKey = () => new Date().toISOString().split("T")[0];
+  const todayKey = () => dateKey(new Date());
 
   // Fire-and-forget remote write; local state is already saved, so failures only flip the status dot.
   const remote = (fn) => {
@@ -219,7 +224,7 @@ export default function App() {
     const mondayOffset = -((today.getDay() + 6) % 7);
     return Array.from({ length: 7 }).map((_, i) => {
       const d = new Date(); d.setDate(d.getDate() + mondayOffset + i);
-      const key = d.toISOString().split("T")[0];
+      const key = dateKey(d);
       return {
         key,
         day: d.toLocaleDateString("en-US", { weekday: "short" }),
