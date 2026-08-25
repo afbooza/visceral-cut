@@ -219,6 +219,10 @@ export default function App() {
     return m.length ? m[0][1] : null;
   };
 
+  // Least-recently-trained type is up next (never trained sorts first)
+  const lastDate = (type) => Object.keys(logs).filter(k => logs[k].type === type).sort().pop() || "";
+  const nextUp = ["Push", "Pull", "Legs", "Core"].reduce((a, b) => (lastDate(b) < lastDate(a) ? b : a));
+
   const week = (() => {
     const today = new Date();
     const mondayOffset = -((today.getDay() + 6) % 7);
@@ -314,10 +318,15 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 {["Push", "Pull", "Legs", "Core"].map(type => {
                   const last = getLastLog(type);
+                  const isNext = type === nextUp;
                   const subtitle = { Push: "Chest·Shoulder·Tri", Pull: "Back·Bi·Rear Delt", Legs: "Quads·Hams·Glutes", Core: "Abs·Obliques·Lower Back" }[type];
                   return (
-                    <button key={type} className="session-btn" onClick={() => startSession(type)}>
-                      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: "#c8f060", marginBottom: 2 }}>{type}</div>
+                    <button key={type} className="session-btn" onClick={() => startSession(type)}
+                      style={isNext ? { borderColor: "#c8f060", background: "rgba(200,240,96,0.05)" } : undefined}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+                        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: "#c8f060" }}>{type}</div>
+                        {isNext && <span className="tag" style={{ background: "#c8f060", color: "#0e0e0e", fontSize: 9 }}>Next</span>}
+                      </div>
                       <div style={{ fontSize: 9, color: "#555", marginBottom: 6 }}>{subtitle}</div>
                       <div style={{ fontSize: 9, color: "#444" }}>{last ? `${new Date(last.ts).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : "Not started"}</div>
                     </button>
