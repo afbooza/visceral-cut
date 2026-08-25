@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft } from "./sync.js";
 
 const WARMUPS = {
   Push: [
@@ -29,8 +30,8 @@ const WARMUPS = {
 
 const WORKOUTS = {
   Push: [
-    { name: "DB Floor Press", sets: 4, reps: "8-10", note: "Heavy, controlled descent" },
-    { name: "DB Overhead Press", sets: 3, reps: "10", note: "Strict, no leg drive" },
+    { name: "DB Bench Press", sets: 4, reps: "8-10", note: "Heavy, controlled descent" },
+    { name: "DB Fly", sets: 3, reps: "12", note: "Slight elbow bend, stretch at bottom — no shoulder strain" },
     { name: "DB Lateral Raise", sets: 3, reps: "15", note: "Slow eccentric" },
     { name: "Push-up", sets: 2, reps: "AMRAP", note: "Bodyweight finisher — slow eccentric if easy", type: "bodyweight" },
     { name: "Dips", sets: 3, reps: "8-12", note: "Lean forward for chest, upright for tricep focus" },
@@ -70,7 +71,26 @@ const WEEK_TEMPLATE = [
 ];
 
 const STORAGE_KEY = "tony-workout-tracker-v2";
+const DRAFT_KEY = "tony-workout-draft";
 const TYPE_COLORS = { Push: "#c8f060", Pull: "#60c8f0", Legs: "#f0a040", Core: "#d060f0" };
+const SYNC_COLORS = { synced: "#c8f060", pending: "#f0a040", error: "#f06060" };
+
+// Newer entry wins, per date. `up` = last-updated timestamp (falls back to `ts` for old entries).
+function mergeLogs(local, remote) {
+  const merged = { ...remote };
+  for (const [date, log] of Object.entries(local)) {
+    const r = merged[date];
+    if (!r || (log.up || log.ts || 0) > (r.up || r.ts || 0)) merged[date] = log;
+  }
+  return merged;
+}
+
+function readLocal() {
+  let logs = {}, draft = null;
+  try { const saved = localStorage.getItem(STORAGE_KEY); if (saved) logs = JSON.parse(saved).logs || {}; } catch {}
+  try { const d = localStorage.getItem(DRAFT_KEY); if (d) draft = JSON.parse(d); } catch {}
+  return { logs, draft };
+}
 
 function formatPrev(prev, type) {
   if (!prev) return "—";
@@ -92,16 +112,79 @@ export default function App() {
   const [sessionData, setSessionData] = useState({});
   const [warmupDone, setWarmupDone] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [syncState, setSyncState] = useState(getToken() ? "pending" : "off"); // off | pending | synced | error
+  const [tokenInput, setTokenInput] = useState(getToken());
+  const draftTimer = useRef(null);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) { const p = JSON.parse(saved); setLogs(p.logs || {}); }
-    } catch {}
+    const { logs: local, draft: localDraft } = readLocal();
+    setLogs(local);
+    if (localDraft) setDraft(localDraft);
+    syncNow();
   }, []);
 
   const persist = (l) => localStorage.setItem(STORAGE_KEY, JSON.stringify({ logs: l }));
   const todayKey = () => new Date().toISOString().split("T")[0];
+
+  // Fire-and-forget remote write; local state is already saved, so failures only flip the status dot.
+  const remote = (fn) => {
+    if (!getToken()) return;
+    setSyncState("pending");
+    fn().then(() => setSyncState("synced")).catch(() => setSyncState("error"));
+  };
+
+  // Full two-way sync: pull remote, merge (newer wins per date), push anything the server is missing.
+  const syncNow = async () => {
+    if (!getToken()) { setSyncState("off"); return; }
+    setSyncState("pending");
+    try {
+      const { logs: local, draft: localDraft } = readLocal();
+      const [remoteLogs, remoteDraft] = await Promise.all([fetchLogs(), fetchDraft()]);
+      const merged = mergeLogs(local, remoteLogs);
+      setLogs(merged); persist(merged);
+      const toPush = {};
+      for (const [date, log] of Object.entries(merged)) {
+        const r = remoteLogs[date];
+        if (!r || (log.up || log.ts || 0) > (r.up || r.ts || 0)) toPush[date] = log;
+      }
+      if (Object.keys(toPush).length) await pushLogsBulk(toPush);
+      const bestDraft = [localDraft, remoteDraft].filter(Boolean).sort((a, b) => (b.ts || 0) - (a.ts || 0))[0] || null;
+      if (bestDraft) {
+        setDraft(bestDraft);
+        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(bestDraft)); } catch {}
+      }
+      setSyncState("synced");
+    } catch {
+      setSyncState("error");
+    }
+  };
+
+  // Save in-progress session locally on every keystroke; push to server debounced.
+  const saveDraft = (data) => {
+    const d = { type: activeSession, date: todayKey(), data, ts: Date.now() };
+    setDraft(d);
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch {}
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => remote(() => pushDraft(d)), 1500);
+  };
+
+  const discardDraft = () => {
+    setDraft(null);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    remote(() => clearRemoteDraft());
+  };
+
+  const resumeDraft = () => {
+    if (!draft) return;
+    setActiveSession(draft.type); setWarmupDone(true);
+    const init = {};
+    WORKOUTS[draft.type].forEach((ex, i) => {
+      init[i] = Array.from({ length: ex.sets }, (_, si) => draft.data?.[i]?.[si] ? { ...draft.data[i][si] } : ({ weight: "", reps: "" }));
+    });
+    setSessionData(init); setView("session");
+  };
 
   const startSession = (type) => {
     setActiveSession(type); setWarmupDone(false);
@@ -111,16 +194,19 @@ export default function App() {
   };
 
   const finishSession = () => {
-    const nl = { ...logs, [todayKey()]: { type: activeSession, data: sessionData, ts: Date.now() } };
-    setLogs(nl); persist(nl); setActiveSession(null); setView("dashboard");
+    const key = todayKey();
+    const log = { type: activeSession, data: sessionData, ts: Date.now(), up: Date.now() };
+    const nl = { ...logs, [key]: log };
+    setLogs(nl); persist(nl); discardDraft();
+    remote(() => pushLog(key, log));
+    setActiveSession(null); setView("dashboard");
   };
 
   const updateSet = (exIdx, setIdx, field, value) => {
-    setSessionData(prev => {
-      const u = { ...prev };
-      u[exIdx] = u[exIdx].map((s, i) => i === setIdx ? { ...s, [field]: value } : s);
-      return u;
-    });
+    const u = { ...sessionData };
+    u[exIdx] = (u[exIdx] || []).map((s, i) => i === setIdx ? { ...s, [field]: value } : s);
+    setSessionData(u);
+    saveDraft(u);
   };
 
   const getLastLog = (type) => {
@@ -169,10 +255,13 @@ export default function App() {
       `}</style>
 
       {/* Top bar */}
-      <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#0e0e0e", borderBottom: "1px solid #1e1e1e", padding: "env(safe-area-inset-top) 20px 12px", paddingTop: `max(env(safe-area-inset-top), 12px)` }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#0e0e0e", borderBottom: "1px solid #1e1e1e", padding: "env(safe-area-inset-top) 20px 12px", paddingTop: `max(env(safe-area-inset-top), 12px)`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: "0.1em", color: "#c8f060" }}>
-          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : "VISCERAL CUT"}
+          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : view === "settings" ? "SYNC & BACKUP" : "VISCERAL CUT"}
         </div>
+        {syncState !== "off" && (
+          <div style={{ width: 8, height: 8, borderRadius: 4, background: SYNC_COLORS[syncState] || "#555", flexShrink: 0 }} />
+        )}
       </div>
 
       {/* Content */}
@@ -181,6 +270,21 @@ export default function App() {
         {/* DASHBOARD */}
         {view === "dashboard" && (
           <div>
+            {draft && (
+              <div className="card" style={{ marginBottom: 16, borderColor: "#3a4a1a", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 15, color: "#c8f060", letterSpacing: "0.06em" }}>SESSION IN PROGRESS</div>
+                  <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>
+                    {draft.type} · {draft.date} · {Object.values(draft.data || {}).flat().filter(s => s.weight || s.reps).length} sets logged
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button className="btn btn-ghost" style={{ fontSize: 11, padding: "8px 10px", color: "#f06060", borderColor: "#3a1a1a" }}
+                    onClick={() => { if (confirm("Discard the in-progress session?")) discardDraft(); }}>✕</button>
+                  <button className="btn btn-primary" style={{ fontSize: 12, padding: "8px 14px" }} onClick={resumeDraft}>Resume</button>
+                </div>
+              </div>
+            )}
             <div style={{ marginBottom: 18 }}>
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>THIS WEEK</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
@@ -358,16 +462,25 @@ export default function App() {
 
               <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 4 }} onClick={() => {
                 const nl = { ...logs };
-                if (editingLog.editDate !== editingLog.dateKey) delete nl[editingLog.dateKey];
-                nl[editingLog.editDate] = { type: logType, data: editingLog.editData, ts: editingLog.log.ts };
-                setLogs(nl); persist(nl); setEditingLog(null); setView("history");
+                const moved = editingLog.editDate !== editingLog.dateKey;
+                if (moved) delete nl[editingLog.dateKey];
+                const log = { type: logType, data: editingLog.editData, ts: editingLog.log.ts, up: Date.now() };
+                nl[editingLog.editDate] = log;
+                setLogs(nl); persist(nl);
+                remote(async () => {
+                  if (moved) await removeLog(editingLog.dateKey);
+                  await pushLog(editingLog.editDate, log);
+                });
+                setEditingLog(null); setView("history");
               }}>Save Changes</button>
 
               <button className="btn btn-ghost" style={{ width: "100%", padding: 14, fontSize: 15, marginTop: 8, color: "#f06060", borderColor: "#3a1a1a" }} onClick={() => {
                 if (confirm("Delete this session?")) {
                   const nl = { ...logs };
                   delete nl[editingLog.dateKey];
-                  setLogs(nl); persist(nl); setEditingLog(null); setView("history");
+                  setLogs(nl); persist(nl);
+                  remote(() => removeLog(editingLog.dateKey));
+                  setEditingLog(null); setView("history");
                 }
               }}>Delete Session</button>
             </div>
@@ -449,11 +562,54 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* SETTINGS / SYNC */}
+        {view === "settings" && (
+          <div>
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>CLOUD SYNC</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                <div style={{ width: 8, height: 8, borderRadius: 4, background: SYNC_COLORS[syncState] || "#555", flexShrink: 0 }} />
+                <div style={{ fontSize: 12, color: "#888" }}>
+                  {syncState === "off" && "Local only — enter your sync token to enable cloud backup."}
+                  {syncState === "pending" && "Syncing…"}
+                  {syncState === "synced" && `Synced · ${Object.keys(logs).length} sessions`}
+                  {syncState === "error" && "Sync failed — check token or connection."}
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>SYNC TOKEN</div>
+              <input type="text" placeholder="paste token" value={tokenInput} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                onChange={e => setTokenInput(e.target.value)} style={{ marginBottom: 10 }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => { saveToken(tokenInput.trim()); syncNow(); }}>Save & Sync</button>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={syncNow} disabled={syncState === "pending"}>Sync Now</button>
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>BACKUP</div>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>{Object.keys(logs).length} sessions on this device.</div>
+              <button className="btn btn-ghost" style={{ width: "100%" }} onClick={async () => {
+                const payload = JSON.stringify({ logs }, null, 2);
+                try {
+                  await navigator.clipboard.writeText(payload);
+                  alert(`Copied ${Object.keys(logs).length} sessions to clipboard.`);
+                } catch {
+                  try { await navigator.share({ text: payload }); } catch {}
+                }
+              }}>Copy Backup JSON</button>
+            </div>
+
+            <div style={{ fontSize: 10, color: "#444", lineHeight: 1.6, padding: "0 4px" }}>
+              Every set you enter is saved on this device instantly and pushed to the cloud within seconds. Closing the app mid-workout is safe — you'll get a Resume banner when you come back.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Nav */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#0e0e0e", borderTop: "1px solid #1e1e1e", display: "flex", paddingBottom: "env(safe-area-inset-bottom)", zIndex: 100 }}>
-        {[["dashboard","⊞","Home"],["history","≡","Log"],["schedule","▦","Plan"]].map(([v, icon, label]) => (
+        {[["dashboard","⊞","Home"],["history","≡","Log"],["schedule","▦","Plan"],["settings","⟳","Sync"]].map(([v, icon, label]) => (
           <button key={v} className={`nav-btn ${view === v || (view === "session" && v === "dashboard") || (view === "edit-session" && v === "history") ? "active" : ""}`}
             onClick={() => { if (v === "dashboard" && view === "session") { setView("dashboard"); setActiveSession(null); } else if (view === "edit-session") { setEditingLog(null); setView(v); } else setView(v); }}>
             <span className="nav-icon">{icon}</span>
