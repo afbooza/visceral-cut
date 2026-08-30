@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft } from "./sync.js";
+import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram } from "./sync.js";
 
 const WARMUPS = {
   Push: [
@@ -72,11 +72,14 @@ const WEEK_TEMPLATE = [
 
 const STORAGE_KEY = "tony-workout-tracker-v2";
 const DRAFT_KEY = "tony-workout-draft";
+const CATALOG_KEY = "tony-workout-catalog";
+const PROGRAM_KEY = "tony-workout-program";
+const SESSION_TYPES = ["Push", "Pull", "Legs", "Core"];
 const TYPE_COLORS = { Push: "#c8f060", Pull: "#60c8f0", Legs: "#f0a040", Core: "#d060f0" };
 const SYNC_COLORS = { synced: "#c8f060", pending: "#f0a040", error: "#f06060" };
 
-// Newer entry wins, per date. `up` = last-updated timestamp (falls back to `ts` for old entries).
-function mergeLogs(local, remote) {
+// Newer entry wins, per key (logs keyed by date, catalog by exercise id). `up` = last-updated timestamp (falls back to `ts` for old entries).
+function mergeNewerWins(local, remote) {
   const merged = { ...remote };
   for (const [date, log] of Object.entries(local)) {
     const r = merged[date];
@@ -86,10 +89,12 @@ function mergeLogs(local, remote) {
 }
 
 function readLocal() {
-  let logs = {}, draft = null;
+  let logs = {}, draft = null, catalog = {}, program = null;
   try { const saved = localStorage.getItem(STORAGE_KEY); if (saved) logs = JSON.parse(saved).logs || {}; } catch {}
   try { const d = localStorage.getItem(DRAFT_KEY); if (d) draft = JSON.parse(d); } catch {}
-  return { logs, draft };
+  try { const c = localStorage.getItem(CATALOG_KEY); if (c) catalog = JSON.parse(c).items || {}; } catch {}
+  try { const p = localStorage.getItem(PROGRAM_KEY); if (p) program = JSON.parse(p); } catch {}
+  return { logs, draft, catalog, program };
 }
 
 // YYYY-MM-DD in the device's local timezone (toISOString is UTC — after 5-6pm MT it rolls to tomorrow)
@@ -120,16 +125,27 @@ export default function App() {
   const [draft, setDraft] = useState(null);
   const [syncState, setSyncState] = useState(getToken() ? "pending" : "off"); // off | pending | synced | error
   const [tokenInput, setTokenInput] = useState(getToken());
+  const [catalog, setCatalog] = useState({}); // { id: exercise }
+  const [program, setProgram] = useState(null); // { days: { Push: [...], ... }, up } — null = stock WORKOUTS
+  const [catalogFilter, setCatalogFilter] = useState("All");
+  const [exForm, setExForm] = useState(null); // null | catalog exercise being added/edited
+  const [swapTarget, setSwapTarget] = useState(null); // null | { type, exIdx }
+  const [programDay, setProgramDay] = useState("Push");
   const draftTimer = useRef(null);
 
   useEffect(() => {
-    const { logs: local, draft: localDraft } = readLocal();
+    const { logs: local, draft: localDraft, catalog: localCatalog, program: localProgram } = readLocal();
     setLogs(local);
     if (localDraft) setDraft(localDraft);
+    setCatalog(localCatalog);
+    if (localProgram) setProgram(localProgram);
     syncNow();
   }, []);
 
   const persist = (l) => localStorage.setItem(STORAGE_KEY, JSON.stringify({ logs: l }));
+  const persistCatalog = (c) => { try { localStorage.setItem(CATALOG_KEY, JSON.stringify({ items: c })); } catch {} };
+  const persistProgram = (p) => { try { localStorage.setItem(PROGRAM_KEY, JSON.stringify(p)); } catch {} };
+  const getProgram = (type) => program?.days?.[type] || WORKOUTS[type];
   const todayKey = () => dateKey(new Date());
 
   // Fire-and-forget remote write; local state is already saved, so failures only flip the status dot.
@@ -144,9 +160,9 @@ export default function App() {
     if (!getToken()) { setSyncState("off"); return; }
     setSyncState("pending");
     try {
-      const { logs: local, draft: localDraft } = readLocal();
-      const [remoteLogs, remoteDraft] = await Promise.all([fetchLogs(), fetchDraft()]);
-      const merged = mergeLogs(local, remoteLogs);
+      const { logs: local, draft: localDraft, catalog: localCatalog, program: localProgram } = readLocal();
+      const [remoteLogs, remoteDraft, remoteCatalog, remoteProgram] = await Promise.all([fetchLogs(), fetchDraft(), fetchCatalog(), fetchProgram()]);
+      const merged = mergeNewerWins(local, remoteLogs);
       setLogs(merged); persist(merged);
       const toPush = {};
       for (const [date, log] of Object.entries(merged)) {
@@ -154,6 +170,20 @@ export default function App() {
         if (!r || (log.up || log.ts || 0) > (r.up || r.ts || 0)) toPush[date] = log;
       }
       if (Object.keys(toPush).length) await pushLogsBulk(toPush);
+      const mergedCat = mergeNewerWins(localCatalog, remoteCatalog);
+      setCatalog(mergedCat); persistCatalog(mergedCat);
+      const catToPush = {};
+      for (const [id, item] of Object.entries(mergedCat)) {
+        const r = remoteCatalog[id];
+        if (!r || (item.up || 0) > (r.up || 0)) catToPush[id] = item;
+      }
+      if (Object.keys(catToPush).length) await pushCatalogBulk(catToPush);
+      // Program is one object — whole-thing newer-wins, like the draft.
+      const bestProgram = [localProgram, remoteProgram].filter(Boolean).sort((a, b) => (b.up || 0) - (a.up || 0))[0] || null;
+      if (bestProgram) {
+        setProgram(bestProgram); persistProgram(bestProgram);
+        if ((localProgram?.up || 0) > (remoteProgram?.up || 0)) await pushProgram(bestProgram);
+      }
       const bestDraft = [localDraft, remoteDraft].filter(Boolean).sort((a, b) => (b.ts || 0) - (a.ts || 0))[0] || null;
       if (bestDraft) {
         setDraft(bestDraft);
@@ -181,11 +211,69 @@ export default function App() {
     remote(() => clearRemoteDraft());
   };
 
+  const blankExercise = (workoutType = "Push") => ({ name: "", workoutType, track: "weight", bodyPart: "", sets: "3", reps: "", weight: "", description: "", video: "" });
+
+  const saveExercise = () => {
+    const id = exForm.id || (crypto.randomUUID ? crypto.randomUUID() : `ex-${Date.now()}`);
+    const item = {
+      name: exForm.name.trim(), workoutType: exForm.workoutType, track: exForm.track,
+      bodyPart: exForm.bodyPart.trim(), sets: Number(exForm.sets) || 3, reps: exForm.reps.trim(),
+      weight: exForm.track === "weight" ? exForm.weight : "", description: exForm.description.trim(),
+      video: exForm.video.trim(), up: Date.now(),
+    };
+    const nc = { ...catalog, [id]: item };
+    setCatalog(nc); persistCatalog(nc);
+    remote(() => pushCatalogItem(id, item));
+    setExForm(null);
+  };
+
+  const deleteExercise = (id) => {
+    const nc = { ...catalog };
+    delete nc[id];
+    setCatalog(nc); persistCatalog(nc);
+    remote(() => removeCatalogItem(id));
+    setExForm(null);
+  };
+
+  // Swapped-in exercises are snapshots of the catalog item — editing the catalog later doesn't rewrite the program.
+  const catalogToProgramEx = (id, item) => ({
+    name: item.name, sets: Number(item.sets) || 3, reps: item.reps || "10",
+    ...(item.description ? { note: item.description } : {}),
+    ...(item.track && item.track !== "weight" ? { type: item.track } : {}),
+    ...(item.weight ? { weight: item.weight } : {}),
+    ...(item.video ? { video: item.video } : {}),
+    catalogId: id,
+  });
+
+  const updateProgramDay = (type, exercises) => {
+    const days = Object.fromEntries(SESSION_TYPES.map(t => [t, getProgram(t)]));
+    days[type] = exercises;
+    const p = { days, up: Date.now() };
+    setProgram(p); persistProgram(p);
+    remote(() => pushProgram(p));
+  };
+
+  const swapExercise = (type, exIdx, id, item) => {
+    const list = [...getProgram(type)];
+    list[exIdx] = catalogToProgramEx(id, item);
+    updateProgramDay(type, list);
+    setSwapTarget(null);
+  };
+
+  const restoreSlot = (type, exIdx) => {
+    const list = [...getProgram(type)];
+    list[exIdx] = { ...WORKOUTS[type][exIdx] };
+    updateProgramDay(type, list);
+    setSwapTarget(null);
+  };
+
+  const resetDay = (type) => updateProgramDay(type, WORKOUTS[type].map(ex => ({ ...ex })));
+
   const resumeDraft = () => {
     if (!draft) return;
     setActiveSession(draft.type); setWarmupDone(true);
     const init = {};
-    WORKOUTS[draft.type].forEach((ex, i) => {
+    getProgram(draft.type).forEach((ex, i) => {
       init[i] = Array.from({ length: ex.sets }, (_, si) => draft.data?.[i]?.[si] ? { ...draft.data[i][si] } : ({ weight: "", reps: "" }));
     });
     setSessionData(init); setView("session");
@@ -194,13 +282,14 @@ export default function App() {
   const startSession = (type) => {
     setActiveSession(type); setWarmupDone(false);
     const init = {};
-    WORKOUTS[type].forEach((ex, i) => { init[i] = Array.from({ length: ex.sets }, () => ({ weight: "", reps: "" })); });
+    getProgram(type).forEach((ex, i) => { init[i] = Array.from({ length: ex.sets }, () => ({ weight: "", reps: "" })); });
     setSessionData(init); setView("session");
   };
 
   const finishSession = () => {
     const key = todayKey();
-    const log = { type: activeSession, data: sessionData, ts: Date.now(), up: Date.now() };
+    // names lets PREV/history stay honest after a slot is swapped (history is keyed by exercise index)
+    const log = { type: activeSession, names: getProgram(activeSession).map(e => e.name), data: sessionData, ts: Date.now(), up: Date.now() };
     const nl = { ...logs, [key]: log };
     setLogs(nl); persist(nl); discardDraft();
     remote(() => pushLog(key, log));
@@ -221,7 +310,7 @@ export default function App() {
 
   // Least-recently-trained type is up next (never trained sorts first)
   const lastDate = (type) => Object.keys(logs).filter(k => logs[k].type === type).sort().pop() || "";
-  const nextUp = ["Push", "Pull", "Legs", "Core"].reduce((a, b) => (lastDate(b) < lastDate(a) ? b : a));
+  const nextUp = SESSION_TYPES.reduce((a, b) => (lastDate(b) < lastDate(a) ? b : a));
 
   const week = (() => {
     const today = new Date();
@@ -246,13 +335,17 @@ export default function App() {
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Bebas+Neue&display=swap');
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { margin: 0; overscroll-behavior: none; }
-        input { background: #1a1a1a; border: 1px solid #2a2a2a; color: #e8e8e0; font-family: 'DM Mono', monospace; border-radius: 4px; padding: 10px 12px; width: 100%; font-size: 16px; }
-        input:focus { outline: none; border-color: #c8f060; }
+        input, textarea { background: #1a1a1a; border: 1px solid #2a2a2a; color: #e8e8e0; font-family: 'DM Mono', monospace; border-radius: 4px; padding: 10px 12px; width: 100%; font-size: 16px; }
+        input:focus, textarea:focus { outline: none; border-color: #c8f060; }
+        textarea { resize: vertical; }
         .btn { cursor: pointer; border: none; font-family: 'DM Mono', monospace; border-radius: 6px; padding: 12px 18px; font-size: 14px; font-weight: 500; transition: all 0.15s; -webkit-tap-highlight-color: transparent; }
         .btn-primary { background: #c8f060; color: #0e0e0e; }
         .btn-primary:active { background: #d9ff70; }
         .btn-ghost { background: transparent; color: #888; border: 1px solid #2a2a2a; }
         .btn-ghost:active { border-color: #555; color: #e8e8e0; }
+        .btn:disabled { opacity: 0.4; }
+        .chip { cursor: pointer; background: transparent; border: 1px solid #2a2a2a; color: #888; font-family: 'DM Mono', monospace; border-radius: 20px; padding: 6px 14px; font-size: 11px; transition: all 0.15s; -webkit-tap-highlight-color: transparent; }
+        .chip.active { border-color: #c8f060; color: #c8f060; background: rgba(200,240,96,0.08); }
         .card { background: #141414; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; }
         .tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; }
         ::-webkit-scrollbar { display: none; }
@@ -266,7 +359,7 @@ export default function App() {
       {/* Top bar */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#0e0e0e", borderBottom: "1px solid #1e1e1e", padding: "env(safe-area-inset-top) 20px 12px", paddingTop: `max(env(safe-area-inset-top), 12px)`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: "0.1em", color: "#c8f060" }}>
-          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : view === "settings" ? "SYNC & BACKUP" : "VISCERAL CUT"}
+          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : view === "catalog" ? "EXERCISE CATALOG" : view === "settings" ? "SYNC & BACKUP" : "VISCERAL CUT"}
         </div>
         {syncState !== "off" && (
           <div style={{ width: 8, height: 8, borderRadius: 4, background: SYNC_COLORS[syncState] || "#555", flexShrink: 0 }} />
@@ -316,7 +409,7 @@ export default function App() {
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>START SESSION</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {["Push", "Pull", "Legs", "Core"].map(type => {
+                {SESSION_TYPES.map(type => {
                   const last = getLastLog(type);
                   const isNext = type === nextUp;
                   const subtitle = { Push: "Chest·Shoulder·Tri", Pull: "Back·Bi·Rear Delt", Legs: "Quads·Hams·Glutes", Core: "Abs·Obliques·Lower Back" }[type];
@@ -372,8 +465,10 @@ export default function App() {
               </div>
             )}
 
-            {warmupDone && WORKOUTS[activeSession].map((ex, exIdx) => {
-              const lastSets = getLastLog(activeSession)?.data?.[exIdx] || [];
+            {warmupDone && getProgram(activeSession).map((ex, exIdx) => {
+              const last = getLastLog(activeSession);
+              // PREV only counts if the same exercise held this slot last time (history is keyed by index)
+              const lastSets = (!last?.names || last.names[exIdx] === ex.name) ? last?.data?.[exIdx] || [] : [];
               const hideWeight = ex.type === "bodyweight" || ex.type === "time";
               const repLabel = ex.type === "time" ? "SEC" : "REPS";
               const repPh = ex.type === "time" ? "sec" : "reps";
@@ -382,7 +477,10 @@ export default function App() {
                 <div key={exIdx} className="card" style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 500 }}>{ex.name}</div>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>
+                        {ex.name}
+                        {ex.video && <a href={ex.video} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#60c8f0", marginLeft: 8, textDecoration: "none" }}>▶ video</a>}
+                      </div>
                       {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
                     </div>
                     <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}{ex.type === "time" ? "s" : ""}</div>
@@ -399,7 +497,7 @@ export default function App() {
                       <div key={setIdx} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 8 }}>
                         <div style={{ fontSize: 11, color: "#555", textAlign: "center", paddingTop: 10 }}>{setIdx + 1}</div>
                         {!hideWeight && (
-                          <input type="number" inputMode="decimal" placeholder="lbs" value={sessionData[exIdx]?.[setIdx]?.weight || ""}
+                          <input type="number" inputMode="decimal" placeholder={ex.weight ? String(ex.weight) : "lbs"} value={sessionData[exIdx]?.[setIdx]?.weight || ""}
                             onChange={e => updateSet(exIdx, setIdx, "weight", e.target.value)} style={{ textAlign: "center" }} />
                         )}
                         <input type="number" inputMode="numeric" placeholder={repPh} value={sessionData[exIdx]?.[setIdx]?.reps || ""}
@@ -432,7 +530,7 @@ export default function App() {
                   style={{ colorScheme: "dark" }} />
               </div>
 
-              {WORKOUTS[logType].map((ex, exIdx) => {
+              {getProgram(logType).map((ex, exIdx) => {
                 const hideWeight = ex.type === "bodyweight" || ex.type === "time";
                 const repLabel = ex.type === "time" ? "SEC" : "REPS";
                 const repPh = ex.type === "time" ? "sec" : "reps";
@@ -441,7 +539,7 @@ export default function App() {
                   <div key={exIdx} className="card" style={{ marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
                       <div>
-                        <div style={{ fontSize: 14, fontWeight: 500 }}>{ex.name}</div>
+                        <div style={{ fontSize: 14, fontWeight: 500 }}>{editingLog.log.names?.[exIdx] || ex.name}</div>
                         {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
                       </div>
                       <div style={{ fontSize: 11, color: "#777", textAlign: "right" }}>{ex.sets}×{ex.reps}{ex.type === "time" ? "s" : ""}</div>
@@ -478,7 +576,7 @@ export default function App() {
                 const nl = { ...logs };
                 const moved = editingLog.editDate !== editingLog.dateKey;
                 if (moved) delete nl[editingLog.dateKey];
-                const log = { type: logType, data: editingLog.editData, ts: editingLog.log.ts, up: Date.now() };
+                const log = { type: logType, ...(editingLog.log.names ? { names: editingLog.log.names } : {}), data: editingLog.editData, ts: editingLog.log.ts, up: Date.now() };
                 nl[editingLog.editDate] = log;
                 setLogs(nl); persist(nl);
                 remote(async () => {
@@ -516,7 +614,7 @@ export default function App() {
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <button className="btn btn-ghost" style={{ fontSize: 10, padding: "4px 10px" }} onClick={() => {
                         const editData = {};
-                        WORKOUTS[log.type].forEach((ex, i) => {
+                        getProgram(log.type).forEach((ex, i) => {
                           editData[i] = log.data?.[i] ? log.data[i].map(s => ({ ...s })) : Array.from({ length: ex.sets }, () => ({ weight: "", reps: "" }));
                         });
                         setEditingLog({ dateKey: date, log, editDate: date, editData });
@@ -524,12 +622,12 @@ export default function App() {
                       }}>Edit</button>
                     </div>
                   </div>
-                  {WORKOUTS[log.type].map((ex, exIdx) => {
+                  {getProgram(log.type).map((ex, exIdx) => {
                     const sets = log.data?.[exIdx]?.filter(s => s.weight || s.reps) || [];
                     if (!sets.length) return null;
                     return (
                       <div key={exIdx} style={{ marginBottom: 8 }}>
-                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>{ex.name}</div>
+                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>{log.names?.[exIdx] || ex.name}</div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           {sets.map((s, i) => (
                             <span key={i} style={{ fontSize: 11, background: "#1a1a1a", padding: "2px 8px", borderRadius: 3, color: "#c8f060" }}>
@@ -548,6 +646,33 @@ export default function App() {
         {/* SCHEDULE */}
         {view === "schedule" && (
           <div>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>PROGRAM</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {SESSION_TYPES.map(t => (
+                <button key={t} className={`chip ${programDay === t ? "active" : ""}`} onClick={() => setProgramDay(t)}>{t}</button>
+              ))}
+            </div>
+            <div className="card" style={{ marginBottom: 8, padding: "4px 14px" }}>
+              {getProgram(programDay).map((ex, i, arr) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: i < arr.length - 1 ? "1px solid #1a1a1a" : "none" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ex.name}</span>
+                      {ex.catalogId && <span className="tag" style={{ background: "rgba(96,200,240,0.12)", color: "#60c8f0", fontSize: 8, flexShrink: 0 }}>Custom</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>{ex.sets}×{ex.reps}{ex.type === "time" ? "s" : ""}</div>
+                  </div>
+                  <button className="btn btn-ghost" style={{ fontSize: 10, padding: "6px 10px", flexShrink: 0 }} onClick={() => setSwapTarget({ type: programDay, exIdx: i })}>⇄ Swap</button>
+                </div>
+              ))}
+            </div>
+            {JSON.stringify(getProgram(programDay)) !== JSON.stringify(WORKOUTS[programDay]) ? (
+              <button className="btn btn-ghost" style={{ width: "100%", marginBottom: 24, fontSize: 11 }}
+                onClick={() => { if (confirm(`Reset ${programDay} day to the default exercises?`)) resetDay(programDay); }}>Reset {programDay} to default</button>
+            ) : (
+              <div style={{ fontSize: 10, color: "#444", marginBottom: 24, padding: "0 4px" }}>Tap ⇄ to swap a slot for an exercise from your catalog.</div>
+            )}
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>WEEK</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
               {WEEK_TEMPLATE.map(({ day, session, type }) => (
                 <div key={day} className="card" style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", background: typeBg(type) }}>
@@ -577,6 +702,104 @@ export default function App() {
           </div>
         )}
 
+        {/* CATALOG */}
+        {view === "catalog" && (
+          <div>
+            {exForm ? (
+              <div className="card" style={{ marginBottom: 12 }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 14, color: "#c8f060", marginBottom: 14, letterSpacing: "0.08em" }}>
+                  {exForm.id ? "EDIT EXERCISE" : "NEW EXERCISE"}
+                </div>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>NAME</div>
+                <input value={exForm.name} onChange={e => setExForm({ ...exForm, name: e.target.value })} placeholder="e.g. DB Incline Press" style={{ marginBottom: 12 }} />
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>WORKOUT TYPE</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                  {SESSION_TYPES.map(t => (
+                    <button key={t} className={`chip ${exForm.workoutType === t ? "active" : ""}`} onClick={() => setExForm({ ...exForm, workoutType: t })}>{t}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>TRACKING</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                  {[["weight", "Weighted"], ["bodyweight", "Bodyweight"], ["time", "Timed"]].map(([val, label]) => (
+                    <button key={val} className={`chip ${exForm.track === val ? "active" : ""}`} onClick={() => setExForm({ ...exForm, track: val })}>{label}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>BODY FOCUS</div>
+                <input value={exForm.bodyPart} onChange={e => setExForm({ ...exForm, bodyPart: e.target.value })} placeholder="e.g. Chest · Front delts" style={{ marginBottom: 12 }} />
+                <div style={{ display: "grid", gridTemplateColumns: exForm.track === "weight" ? "1fr 1fr 1fr" : "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>SETS</div>
+                    <input type="number" inputMode="numeric" value={exForm.sets} onChange={e => setExForm({ ...exForm, sets: e.target.value })} placeholder="3" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>{exForm.track === "time" ? "SECONDS" : "REPS"}</div>
+                    <input value={exForm.reps} onChange={e => setExForm({ ...exForm, reps: e.target.value })} placeholder={exForm.track === "time" ? "45" : "8-12"} />
+                  </div>
+                  {exForm.track === "weight" && (
+                    <div>
+                      <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>WEIGHT</div>
+                      <input type="number" inputMode="decimal" value={exForm.weight} onChange={e => setExForm({ ...exForm, weight: e.target.value })} placeholder="lbs" />
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>DESCRIPTION</div>
+                <textarea rows={2} value={exForm.description} onChange={e => setExForm({ ...exForm, description: e.target.value })} placeholder="Form cues, machine setup, etc." style={{ marginBottom: 12 }} />
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>VIDEO URL</div>
+                <input type="url" value={exForm.video} onChange={e => setExForm({ ...exForm, video: e.target.value })} placeholder="https://youtube.com/…"
+                  autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ marginBottom: 14 }} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-primary" style={{ flex: 1 }} disabled={!exForm.name.trim()} onClick={saveExercise}>Save</button>
+                  <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setExForm(null)}>Cancel</button>
+                </div>
+                {exForm.id && (
+                  <button className="btn btn-ghost" style={{ width: "100%", marginTop: 8, color: "#f06060", borderColor: "#3a1a1a" }}
+                    onClick={() => { if (confirm("Delete this exercise from the catalog?")) deleteExercise(exForm.id); }}>Delete Exercise</button>
+                )}
+              </div>
+            ) : (
+              <>
+                <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={() => setExForm(blankExercise())}>+ Add Exercise</button>
+                <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
+                  {["All", ...SESSION_TYPES].map(t => (
+                    <button key={t} className={`chip ${catalogFilter === t ? "active" : ""}`} onClick={() => setCatalogFilter(t)}>{t}</button>
+                  ))}
+                </div>
+                {(() => {
+                  const items = Object.entries(catalog)
+                    .filter(([, it]) => catalogFilter === "All" || it.workoutType === catalogFilter)
+                    .sort(([, a], [, b]) => (a.name || "").localeCompare(b.name || ""));
+                  if (!items.length) return (
+                    <div className="card" style={{ color: "#444", fontSize: 12, textAlign: "center", padding: 30 }}>
+                      {Object.keys(catalog).length ? "Nothing here for this filter." : "No exercises yet — add your first one, then swap it into any day from the Plan tab."}
+                    </div>
+                  );
+                  return items.map(([id, it]) => (
+                    <div key={id} className="card" style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 500 }}>{it.name}</div>
+                          <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>
+                            {[it.bodyPart, `${it.sets || 3}×${it.reps || "?"}${it.track === "time" ? "s" : ""}`,
+                              it.track === "bodyweight" ? "BW" : it.track === "time" ? "timed" : it.weight ? `${it.weight} lbs` : null,
+                            ].filter(Boolean).join(" · ")}
+                          </div>
+                          {it.description && <div style={{ fontSize: 11, color: "#666", marginTop: 6 }}>{it.description}</div>}
+                          {it.video && <a href={it.video} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#60c8f0", textDecoration: "none", display: "inline-block", marginTop: 6 }}>▶ Watch video</a>}
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                          <span className="tag" style={{ background: (TYPE_COLORS[it.workoutType] || "#c8f060") + "20", color: TYPE_COLORS[it.workoutType] || "#c8f060" }}>{it.workoutType}</span>
+                          <button className="btn btn-ghost" style={{ fontSize: 10, padding: "4px 10px" }}
+                            onClick={() => setExForm({ ...blankExercise(), ...it, id, sets: String(it.sets ?? 3), weight: it.weight ?? "" })}>Edit</button>
+                        </div>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </>
+            )}
+          </div>
+        )}
+
         {/* SETTINGS / SYNC */}
         {view === "settings" && (
           <div>
@@ -602,9 +825,9 @@ export default function App() {
 
             <div className="card" style={{ marginBottom: 12 }}>
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>BACKUP</div>
-              <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>{Object.keys(logs).length} sessions on this device.</div>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>{Object.keys(logs).length} sessions · {Object.keys(catalog).length} catalog exercises on this device.</div>
               <button className="btn btn-ghost" style={{ width: "100%" }} onClick={async () => {
-                const payload = JSON.stringify({ logs }, null, 2);
+                const payload = JSON.stringify({ logs, catalog, program }, null, 2);
                 try {
                   await navigator.clipboard.writeText(payload);
                   alert(`Copied ${Object.keys(logs).length} sessions to clipboard.`);
@@ -621,9 +844,61 @@ export default function App() {
         )}
       </div>
 
+      {/* Swap picker */}
+      {swapTarget && (() => {
+        const { type, exIdx } = swapTarget;
+        const current = getProgram(type)[exIdx];
+        const stock = WORKOUTS[type][exIdx];
+        const entries = Object.entries(catalog).sort(([, a], [, b]) => (a.name || "").localeCompare(b.name || ""));
+        const matching = entries.filter(([, it]) => it.workoutType === type);
+        const others = entries.filter(([, it]) => it.workoutType !== type);
+        const renderRow = ([id, it]) => (
+          <button key={id} className="session-btn" style={{ marginBottom: 8, padding: "12px 14px" }} onClick={() => swapExercise(type, exIdx, id, it)}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{it.name}</div>
+                <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>{[it.bodyPart, `${it.sets || 3}×${it.reps || "?"}${it.track === "time" ? "s" : ""}`].filter(Boolean).join(" · ")}</div>
+              </div>
+              <span className="tag" style={{ background: (TYPE_COLORS[it.workoutType] || "#c8f060") + "20", color: TYPE_COLORS[it.workoutType] || "#c8f060", flexShrink: 0 }}>{it.workoutType}</span>
+            </div>
+          </button>
+        );
+        return (
+          <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+            onClick={() => setSwapTarget(null)}>
+            <div className="card" style={{ width: "100%", maxWidth: 600, maxHeight: "75dvh", overflowY: "auto", borderRadius: "14px 14px 0 0", borderBottom: "none", paddingBottom: "calc(16px + env(safe-area-inset-bottom))" }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: "#c8f060", letterSpacing: "0.06em" }}>SWAP: {current.name}</div>
+                <button className="btn btn-ghost" style={{ fontSize: 11, padding: "6px 10px", flexShrink: 0 }} onClick={() => setSwapTarget(null)}>✕</button>
+              </div>
+              {stock && stock.name !== current.name && (
+                <button className="session-btn" style={{ marginBottom: 8, padding: "12px 14px", borderColor: "#2a3a1a" }} onClick={() => restoreSlot(type, exIdx)}>
+                  <div style={{ fontSize: 13 }}>↩ Restore default — {stock.name}</div>
+                </button>
+              )}
+              {!entries.length && (
+                <div style={{ color: "#555", fontSize: 12, textAlign: "center", padding: "20px 0" }}>
+                  Your catalog is empty.
+                  <button className="btn btn-primary" style={{ display: "block", margin: "12px auto 0" }}
+                    onClick={() => { setSwapTarget(null); setView("catalog"); setExForm(blankExercise(type)); }}>+ Add an exercise</button>
+                </div>
+              )}
+              {matching.map(renderRow)}
+              {others.length > 0 && (
+                <>
+                  <div style={{ fontSize: 10, color: "#444", margin: "10px 0 8px", letterSpacing: "0.08em" }}>OTHER TYPES</div>
+                  {others.map(renderRow)}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Bottom Nav */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#0e0e0e", borderTop: "1px solid #1e1e1e", display: "flex", paddingBottom: "env(safe-area-inset-bottom)", zIndex: 100 }}>
-        {[["dashboard","⊞","Home"],["history","≡","Log"],["schedule","▦","Plan"],["settings","⟳","Sync"]].map(([v, icon, label]) => (
+        {[["dashboard","⊞","Home"],["history","≡","Log"],["schedule","▦","Plan"],["catalog","▤","Catalog"],["settings","⟳","Sync"]].map(([v, icon, label]) => (
           <button key={v} className={`nav-btn ${view === v || (view === "session" && v === "dashboard") || (view === "edit-session" && v === "history") ? "active" : ""}`}
             onClick={() => { if (v === "dashboard" && view === "session") { setView("dashboard"); setActiveSession(null); } else if (view === "edit-session") { setEditingLog(null); setView(v); } else setView(v); }}>
             <span className="nav-icon">{icon}</span>

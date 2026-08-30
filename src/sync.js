@@ -30,3 +30,11 @@ export const removeLog = (date) => api(`logs?date=${encodeURIComponent(date)}`, 
 export const fetchDraft = () => api("draft").then((r) => r.draft || null);
 export const pushDraft = (draft) => api("draft", { method: "POST", body: JSON.stringify({ draft }) });
 export const clearRemoteDraft = () => api("draft", { method: "DELETE" });
+
+export const fetchCatalog = () => api("catalog").then((r) => r.catalog || {});
+export const pushCatalogItem = (id, item) => api("catalog", { method: "POST", body: JSON.stringify({ id, item }) });
+export const pushCatalogBulk = (items) => api("catalog", { method: "POST", body: JSON.stringify({ items }) });
+export const removeCatalogItem = (id) => api(`catalog?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export const fetchProgram = () => api("program").then((r) => r.program || null);
+export const pushProgram = (program) => api("program", { method: "POST", body: JSON.stringify({ program }) });
