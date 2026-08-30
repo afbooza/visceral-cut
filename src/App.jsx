@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram } from "./sync.js";
+import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram, uploadVideo, deleteVideo, isBlobVideo } from "./sync.js";
 
 const WARMUPS = {
   Push: [
@@ -102,6 +102,9 @@ function dateKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Playable in an inline <video> tag (uploaded clips, direct video files) vs. external links (YouTube etc.)
+const isPlayable = (u) => isBlobVideo(u) || /\.(mp4|mov|webm|m4v)([?#]|$)/i.test(u || "");
+
 function formatPrev(prev, type) {
   if (!prev) return "—";
   if (type === "bodyweight") return prev.reps || "—";
@@ -131,7 +134,10 @@ export default function App() {
   const [exForm, setExForm] = useState(null); // null | catalog exercise being added/edited
   const [swapTarget, setSwapTarget] = useState(null); // null | { type, exIdx }
   const [programDay, setProgramDay] = useState("Push");
+  const [uploading, setUploading] = useState(null); // null | percent
+  const [playingVideo, setPlayingVideo] = useState(null); // null | url
   const draftTimer = useRef(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     const { logs: local, draft: localDraft, catalog: localCatalog, program: localProgram } = readLocal();
@@ -221,18 +227,47 @@ export default function App() {
       weight: exForm.track === "weight" ? exForm.weight : "", description: exForm.description.trim(),
       video: exForm.video.trim(), up: Date.now(),
     };
+    const oldVideo = exForm.id ? catalog[exForm.id]?.video : null;
+    if (isBlobVideo(oldVideo) && oldVideo !== item.video) deleteVideo(oldVideo).catch(() => {});
+    if (isBlobVideo(exForm._newUpload) && exForm._newUpload !== item.video && exForm._newUpload !== oldVideo) deleteVideo(exForm._newUpload).catch(() => {});
     const nc = { ...catalog, [id]: item };
     setCatalog(nc); persistCatalog(nc);
     remote(() => pushCatalogItem(id, item));
     setExForm(null);
   };
 
+  const cancelExerciseForm = () => {
+    const orig = exForm.id ? catalog[exForm.id]?.video : null;
+    if (isBlobVideo(exForm._newUpload) && exForm._newUpload !== orig) deleteVideo(exForm._newUpload).catch(() => {});
+    setExForm(null);
+  };
+
   const deleteExercise = (id) => {
+    const v = catalog[id]?.video;
+    // Keep the blob if a program slot still references this video via its snapshot
+    const inProgram = Object.values(program?.days || {}).flat().some(ex => ex.video === v);
+    if (isBlobVideo(v) && !inProgram) deleteVideo(v).catch(() => {});
     const nc = { ...catalog };
     delete nc[id];
     setCatalog(nc); persistCatalog(nc);
     remote(() => removeCatalogItem(id));
     setExForm(null);
+  };
+
+  const handleVideoFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(0);
+    try {
+      const prevUpload = exForm?._newUpload;
+      const blob = await uploadVideo(file, setUploading);
+      if (isBlobVideo(prevUpload) && prevUpload !== blob.url) deleteVideo(prevUpload).catch(() => {});
+      setExForm(f => ({ ...f, video: blob.url, _newUpload: blob.url }));
+    } catch {
+      alert("Upload failed — check your connection and sync token.");
+    }
+    setUploading(null);
   };
 
   // Swapped-in exercises are snapshots of the catalog item — editing the catalog later doesn't rewrite the program.
@@ -479,7 +514,8 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 500 }}>
                         {ex.name}
-                        {ex.video && <a href={ex.video} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#60c8f0", marginLeft: 8, textDecoration: "none" }}>▶ video</a>}
+                        {ex.video && <a href={ex.video} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#60c8f0", marginLeft: 8, textDecoration: "none" }}
+                          onClick={e => { if (isPlayable(ex.video)) { e.preventDefault(); setPlayingVideo(ex.video); } }}>▶ video</a>}
                       </div>
                       {ex.note && <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{ex.note}</div>}
                     </div>
@@ -744,12 +780,31 @@ export default function App() {
                 </div>
                 <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>DESCRIPTION</div>
                 <textarea rows={2} value={exForm.description} onChange={e => setExForm({ ...exForm, description: e.target.value })} placeholder="Form cues, machine setup, etc." style={{ marginBottom: 12 }} />
-                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>VIDEO URL</div>
-                <input type="url" value={exForm.video} onChange={e => setExForm({ ...exForm, video: e.target.value })} placeholder="https://youtube.com/…"
-                  autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ marginBottom: 14 }} />
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>VIDEO</div>
+                {isBlobVideo(exForm.video) ? (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 4, padding: "10px 12px", marginBottom: 14 }}>
+                    <a href={exForm.video} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#60c8f0", textDecoration: "none" }}
+                      onClick={e => { e.preventDefault(); setPlayingVideo(exForm.video); }}>▶ Uploaded video — tap to preview</a>
+                    <button className="btn btn-ghost" style={{ fontSize: 11, padding: "6px 10px", color: "#f06060", borderColor: "#3a1a1a", flexShrink: 0 }}
+                      onClick={() => setExForm({ ...exForm, video: "" })}>✕</button>
+                  </div>
+                ) : (
+                  <>
+                    <input type="url" value={exForm.video} onChange={e => setExForm({ ...exForm, video: e.target.value })} placeholder="Paste a YouTube or video link"
+                      autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ marginBottom: 8 }} />
+                    <button className="btn btn-ghost" style={{ width: "100%", marginBottom: 14 }} disabled={uploading != null}
+                      onClick={() => {
+                        if (!getToken()) { alert("Uploads are stored in the cloud — enter your sync token in the Sync tab first."); return; }
+                        fileRef.current?.click();
+                      }}>
+                      {uploading != null ? `Uploading… ${uploading}%` : "⇧ Upload from phone"}
+                    </button>
+                    <input ref={fileRef} type="file" accept="video/*" style={{ display: "none" }} onChange={handleVideoFile} />
+                  </>
+                )}
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button className="btn btn-primary" style={{ flex: 1 }} disabled={!exForm.name.trim()} onClick={saveExercise}>Save</button>
-                  <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setExForm(null)}>Cancel</button>
+                  <button className="btn btn-primary" style={{ flex: 1 }} disabled={!exForm.name.trim() || uploading != null} onClick={saveExercise}>Save</button>
+                  <button className="btn btn-ghost" style={{ flex: 1 }} onClick={cancelExerciseForm}>Cancel</button>
                 </div>
                 {exForm.id && (
                   <button className="btn btn-ghost" style={{ width: "100%", marginTop: 8, color: "#f06060", borderColor: "#3a1a1a" }}
@@ -784,7 +839,8 @@ export default function App() {
                             ].filter(Boolean).join(" · ")}
                           </div>
                           {it.description && <div style={{ fontSize: 11, color: "#666", marginTop: 6 }}>{it.description}</div>}
-                          {it.video && <a href={it.video} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#60c8f0", textDecoration: "none", display: "inline-block", marginTop: 6 }}>▶ Watch video</a>}
+                          {it.video && <a href={it.video} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#60c8f0", textDecoration: "none", display: "inline-block", marginTop: 6 }}
+                            onClick={e => { if (isPlayable(it.video)) { e.preventDefault(); setPlayingVideo(it.video); } }}>▶ Watch video</a>}
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
                           <span className="tag" style={{ background: (TYPE_COLORS[it.workoutType] || "#c8f060") + "20", color: TYPE_COLORS[it.workoutType] || "#c8f060" }}>{it.workoutType}</span>
@@ -843,6 +899,16 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Video player */}
+      {playingVideo && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 400, background: "rgba(0,0,0,0.92)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={() => setPlayingVideo(null)}>
+          <video src={playingVideo} controls autoPlay playsInline style={{ maxWidth: "100%", maxHeight: "78dvh", borderRadius: 10, background: "#000" }}
+            onClick={e => e.stopPropagation()} />
+          <button className="btn btn-ghost" style={{ marginTop: 14 }} onClick={() => setPlayingVideo(null)}>✕ Close</button>
+        </div>
+      )}
 
       {/* Swap picker */}
       {swapTarget && (() => {

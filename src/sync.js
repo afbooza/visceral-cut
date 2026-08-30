@@ -1,6 +1,8 @@
 // Thin client for the /api serverless routes backed by Upstash Redis.
 // All calls require a sync token (stored in localStorage, sent as a Bearer header).
 
+import { upload } from "@vercel/blob/client";
+
 const TOKEN_KEY = "tony-workout-sync-token";
 
 export const getToken = () => {
@@ -38,3 +40,18 @@ export const removeCatalogItem = (id) => api(`catalog?id=${encodeURIComponent(id
 
 export const fetchProgram = () => api("program").then((r) => r.program || null);
 export const pushProgram = (program) => api("program", { method: "POST", body: JSON.stringify({ program }) });
+
+// Direct-to-Blob client upload — bypasses the 4.5MB serverless body limit.
+// Auth rides in clientPayload because the blob library makes the token request itself.
+export const uploadVideo = (file, onProgress) =>
+  upload(`videos/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`, file, {
+    access: "public",
+    handleUploadUrl: "/api/upload",
+    clientPayload: getToken(),
+    multipart: true,
+    onUploadProgress: (p) => onProgress?.(Math.round(p.percentage)),
+  });
+
+export const deleteVideo = (url) => api(`upload?url=${encodeURIComponent(url)}`, { method: "DELETE" });
+
+export const isBlobVideo = (url) => !!url && url.includes(".blob.vercel-storage.com");
