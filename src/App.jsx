@@ -302,6 +302,19 @@ export default function App() {
     setSwapTarget(null);
   };
 
+  // Appending keeps existing slot indices stable, so PREV history for the other exercises is unaffected
+  const addExerciseToDay = (type, id, item) => {
+    updateProgramDay(type, [...getProgram(type), catalogToProgramEx(id, item)]);
+    setSwapTarget(null);
+  };
+
+  const removeSlot = (type, exIdx) => {
+    const list = [...getProgram(type)];
+    list.splice(exIdx, 1);
+    updateProgramDay(type, list);
+    setSwapTarget(null);
+  };
+
   const resetDay = (type) => updateProgramDay(type, WORKOUTS[type].map(ex => ({ ...ex })));
 
   const resumeDraft = () => {
@@ -702,11 +715,13 @@ export default function App() {
                 </div>
               ))}
             </div>
+            <button className="btn btn-ghost" style={{ width: "100%", marginBottom: 8, fontSize: 11, color: "#c8f060", borderColor: "#2a3a1a" }}
+              onClick={() => setSwapTarget({ type: programDay, exIdx: null })}>+ Add exercise from catalog</button>
             {JSON.stringify(getProgram(programDay)) !== JSON.stringify(WORKOUTS[programDay]) ? (
               <button className="btn btn-ghost" style={{ width: "100%", marginBottom: 24, fontSize: 11 }}
                 onClick={() => { if (confirm(`Reset ${programDay} day to the default exercises?`)) resetDay(programDay); }}>Reset {programDay} to default</button>
             ) : (
-              <div style={{ fontSize: 10, color: "#444", marginBottom: 24, padding: "0 4px" }}>Tap ⇄ to swap a slot for an exercise from your catalog.</div>
+              <div style={{ fontSize: 10, color: "#444", marginBottom: 24, padding: "0 4px" }}>Tap ⇄ to swap a slot, or add exercises from your catalog.</div>
             )}
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>WEEK</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
@@ -910,16 +925,18 @@ export default function App() {
         </div>
       )}
 
-      {/* Swap picker */}
+      {/* Swap / add picker */}
       {swapTarget && (() => {
         const { type, exIdx } = swapTarget;
-        const current = getProgram(type)[exIdx];
-        const stock = WORKOUTS[type][exIdx];
+        const adding = exIdx == null;
+        const current = adding ? null : getProgram(type)[exIdx];
+        const stock = adding ? null : WORKOUTS[type][exIdx];
         const entries = Object.entries(catalog).sort(([, a], [, b]) => (a.name || "").localeCompare(b.name || ""));
         const matching = entries.filter(([, it]) => it.workoutType === type);
         const others = entries.filter(([, it]) => it.workoutType !== type);
         const renderRow = ([id, it]) => (
-          <button key={id} className="session-btn" style={{ marginBottom: 8, padding: "12px 14px" }} onClick={() => swapExercise(type, exIdx, id, it)}>
+          <button key={id} className="session-btn" style={{ marginBottom: 8, padding: "12px 14px" }}
+            onClick={() => adding ? addExerciseToDay(type, id, it) : swapExercise(type, exIdx, id, it)}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{it.name}</div>
@@ -935,12 +952,20 @@ export default function App() {
             <div className="card" style={{ width: "100%", maxWidth: 600, maxHeight: "75dvh", overflowY: "auto", borderRadius: "14px 14px 0 0", borderBottom: "none", paddingBottom: "calc(16px + env(safe-area-inset-bottom))" }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: "#c8f060", letterSpacing: "0.06em" }}>SWAP: {current.name}</div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: "#c8f060", letterSpacing: "0.06em" }}>
+                  {adding ? `ADD TO ${type.toUpperCase()} DAY` : `SWAP: ${current.name}`}
+                </div>
                 <button className="btn btn-ghost" style={{ fontSize: 11, padding: "6px 10px", flexShrink: 0 }} onClick={() => setSwapTarget(null)}>✕</button>
               </div>
               {stock && stock.name !== current.name && (
                 <button className="session-btn" style={{ marginBottom: 8, padding: "12px 14px", borderColor: "#2a3a1a" }} onClick={() => restoreSlot(type, exIdx)}>
                   <div style={{ fontSize: 13 }}>↩ Restore default — {stock.name}</div>
+                </button>
+              )}
+              {!adding && getProgram(type).length > 1 && (
+                <button className="session-btn" style={{ marginBottom: 8, padding: "12px 14px", borderColor: "#3a1a1a" }}
+                  onClick={() => { if (confirm(`Remove ${current.name} from ${type} day?`)) removeSlot(type, exIdx); }}>
+                  <div style={{ fontSize: 13, color: "#f06060" }}>✕ Remove from this day</div>
                 </button>
               )}
               {!entries.length && (
