@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram, uploadVideo, deleteVideo, isBlobVideo } from "./sync.js";
+import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram, uploadVideo, deleteVideo, isBlobVideo, sessionInfo } from "./sync.js";
 
 const WARMUPS = {
   Push: [
@@ -141,6 +141,17 @@ export default function App() {
   const fileRef = useRef(null);
 
   useEffect(() => {
+    // The Google OIDC callback hands the session token back in the URL fragment
+    const authMatch = location.hash.match(/^#auth=([^&]+)/);
+    if (authMatch) {
+      saveToken(authMatch[1]);
+      setTokenInput(authMatch[1]);
+      setView("settings");
+      history.replaceState(null, "", location.pathname);
+    } else if (location.hash.startsWith("#autherr=")) {
+      alert(`Google sign-in failed: ${decodeURIComponent(location.hash.slice(9))}`);
+      history.replaceState(null, "", location.pathname);
+    }
     const { logs: local, draft: localDraft, catalog: localCatalog, program: localProgram } = readLocal();
     setLogs(local);
     if (localDraft) setDraft(localDraft);
@@ -903,13 +914,34 @@ export default function App() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
                 <div style={{ width: 8, height: 8, borderRadius: 4, background: SYNC_COLORS[syncState] || "#555", flexShrink: 0 }} />
                 <div style={{ fontSize: 12, color: "#888" }}>
-                  {syncState === "off" && "Local only — enter your sync token to enable cloud backup."}
+                  {syncState === "off" && "Local only — sign in with Google (or paste a token) to enable cloud backup."}
                   {syncState === "pending" && "Syncing…"}
                   {syncState === "synced" && `Synced · ${Object.keys(logs).length} sessions`}
-                  {syncState === "error" && "Sync failed — check token or connection."}
+                  {syncState === "error" && "Sync failed — check sign-in, token, or connection."}
                 </div>
               </div>
-              <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>SYNC TOKEN</div>
+              {(() => {
+                const session = sessionInfo(getToken());
+                return session ? (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
+                      Signed in with Google as <span style={{ color: "#c8f060" }}>{session.email}</span>
+                      {session.exp ? <span style={{ color: "#555" }}> · until {new Date(session.exp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span> : null}
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="btn btn-ghost" style={{ flex: 1 }} onClick={async () => {
+                        try { await navigator.clipboard.writeText(getToken()); alert("Token copied — paste it into the Sync tab on another device."); } catch {}
+                      }}>Copy token</button>
+                      <button className="btn btn-ghost" style={{ flex: 1, color: "#f06060", borderColor: "#3a1a1a" }}
+                        onClick={() => { saveToken(""); setTokenInput(""); setSyncState("off"); }}>Sign out</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn btn-primary" style={{ width: "100%", marginBottom: 14 }}
+                    onClick={() => { location.href = "/api/auth/login"; }}>Continue with Google</button>
+                );
+              })()}
+              <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>OR PASTE A TOKEN</div>
               <input type="text" placeholder="paste token" value={tokenInput} autoCapitalize="none" autoCorrect="off" spellCheck={false}
                 onChange={e => setTokenInput(e.target.value)} style={{ marginBottom: 10 }} />
               <div style={{ display: "flex", gap: 8 }}>

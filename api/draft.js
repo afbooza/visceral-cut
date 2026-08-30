@@ -1,4 +1,5 @@
 import { Redis } from "@upstash/redis";
+import { bearerOk } from "./_lib/auth.js";
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
@@ -8,7 +9,7 @@ const redis = new Redis({
 const KEY = "draft";
 
 export default async function handler(req, res) {
-  if (!process.env.SYNC_TOKEN || req.headers.authorization !== `Bearer ${process.env.SYNC_TOKEN}`) {
+  if (!bearerOk(req)) {
     return res.status(401).json({ error: "unauthorized" });
   }
 

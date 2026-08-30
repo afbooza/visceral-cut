@@ -55,3 +55,16 @@ export const uploadVideo = (file, onProgress) =>
 export const deleteVideo = (url) => api(`upload?url=${encodeURIComponent(url)}`, { method: "DELETE" });
 
 export const isBlobVideo = (url) => !!url && url.includes(".blob.vercel-storage.com");
+
+// Google-login session tokens look like `v1.<base64url payload>.<sig>`; the legacy
+// shared secret is opaque, so this returns null for it (and any garbage).
+export const sessionInfo = (token = getToken()) => {
+  try {
+    const [v, payload] = (token || "").split(".");
+    if (v !== "v1" || !payload) return null;
+    const { email, exp } = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return email ? { email, exp } : null;
+  } catch {
+    return null;
+  }
+};

@@ -1,4 +1,5 @@
 import { Redis } from "@upstash/redis";
+import { bearerOk } from "./_lib/auth.js";
 
 // Supports both env var naming schemes: Upstash direct (UPSTASH_*) and
 // Vercel Marketplace / KV (KV_REST_API_*).
@@ -10,7 +11,7 @@ const redis = new Redis({
 const KEY = "logs";
 
 export default async function handler(req, res) {
-  if (!process.env.SYNC_TOKEN || req.headers.authorization !== `Bearer ${process.env.SYNC_TOKEN}`) {
+  if (!bearerOk(req)) {
     return res.status(401).json({ error: "unauthorized" });
   }
 

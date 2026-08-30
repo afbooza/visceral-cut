@@ -1,5 +1,6 @@
 import { handleUpload } from "@vercel/blob/client";
 import { del } from "@vercel/blob";
+import { bearerOk, verifyToken } from "./_lib/auth.js";
 
 export default async function handler(req, res) {
   try {
@@ -10,7 +11,7 @@ export default async function handler(req, res) {
         body: req.body,
         request: req,
         onBeforeGenerateToken: async (pathname, clientPayload) => {
-          if (!process.env.SYNC_TOKEN || clientPayload !== process.env.SYNC_TOKEN) {
+          if (!verifyToken(clientPayload)) {
             throw new Error("unauthorized");
           }
           return {
@@ -25,7 +26,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "DELETE") {
-      if (!process.env.SYNC_TOKEN || req.headers.authorization !== `Bearer ${process.env.SYNC_TOKEN}`) {
+      if (!bearerOk(req)) {
         return res.status(401).json({ error: "unauthorized" });
       }
       const { url } = req.query;
