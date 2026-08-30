@@ -41,16 +41,30 @@ export const removeCatalogItem = (id) => api(`catalog?id=${encodeURIComponent(id
 export const fetchProgram = () => api("program").then((r) => r.program || null);
 export const pushProgram = (program) => api("program", { method: "POST", body: JSON.stringify({ program }) });
 
+// Per-user Blob directory — readable slug + short hash; must match blobDir in
+// api/_lib/auth.js byte-for-byte (the server rejects paths outside your dir).
+async function blobDir(email) {
+  const bytes = new TextEncoder().encode(email);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${email.replace(/[^a-z0-9]/g, "_")}-${hex.slice(0, 8)}`;
+}
+
 // Direct-to-Blob client upload — bypasses the 4.5MB serverless body limit.
 // Auth rides in clientPayload because the blob library makes the token request itself.
-export const uploadVideo = (file, onProgress) =>
-  upload(`videos/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`, file, {
+export const uploadVideo = async (file, onProgress) => {
+  const email = sessionInfo()?.email?.toLowerCase();
+  // Legacy raw-token devices have no email — they upload flat paths, which the
+  // server only permits for the owner account.
+  const dir = email ? `${await blobDir(email)}/` : "";
+  return upload(`videos/${dir}${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`, file, {
     access: "public",
     handleUploadUrl: "/api/upload",
     clientPayload: getToken(),
     multipart: true,
     onUploadProgress: (p) => onProgress?.(Math.round(p.percentage)),
   });
+};
 
 export const deleteVideo = (url) => api(`upload?url=${encodeURIComponent(url)}`, { method: "DELETE" });
 

@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import { bearerOk } from "./_lib/auth.js";
+import { bearerUser } from "./_lib/auth.js";
 
 // Supports both env var naming schemes: Upstash direct (UPSTASH_*) and
 // Vercel Marketplace / KV (KV_REST_API_*).
@@ -8,12 +8,12 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
 
-const KEY = "logs";
-
 export default async function handler(req, res) {
-  if (!bearerOk(req)) {
+  const user = bearerUser(req);
+  if (!user) {
     return res.status(401).json({ error: "unauthorized" });
   }
+  const KEY = `logs:${user.email}`;
 
   try {
     if (req.method === "GET") {

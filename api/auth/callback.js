@@ -1,9 +1,9 @@
-import { mintSession, verifyState, callbackUrl } from "../_lib/auth.js";
+import { mintSession, verifyState, callbackUrl, allowlist } from "../_lib/auth.js";
 
 const fail = (res, msg) => res.redirect(302, `/#autherr=${encodeURIComponent(msg)}`);
 
 export default async function handler(req, res) {
-  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SYNC_TOKEN, ALLOWED_EMAIL } = process.env;
+  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SYNC_TOKEN } = process.env;
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !SYNC_TOKEN) return fail(res, "auth not configured");
 
   const { code, state, error } = req.query;
@@ -32,11 +32,14 @@ export default async function handler(req, res) {
     if (!issOk || claims.aud !== GOOGLE_CLIENT_ID || !claims.email || claims.email_verified === false) {
       return fail(res, "invalid Google token");
     }
-    const allowed = (ALLOWED_EMAIL || "").trim().toLowerCase();
-    if (!allowed || claims.email.toLowerCase() !== allowed) {
+    // Empty allowlist = open signup; an account is just a Google email, created
+    // implicitly the first time its data is written.
+    const email = claims.email.toLowerCase();
+    const allowed = allowlist();
+    if (allowed.length && !allowed.includes(email)) {
       return fail(res, `account ${claims.email} is not allowed`);
     }
-    return res.redirect(302, `/#auth=${mintSession(claims.email, SYNC_TOKEN)}`);
+    return res.redirect(302, `/#auth=${mintSession(email, SYNC_TOKEN)}`);
   } catch (e) {
     return fail(res, "sign-in failed");
   }

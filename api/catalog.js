@@ -1,17 +1,17 @@
 import { Redis } from "@upstash/redis";
-import { bearerOk } from "./_lib/auth.js";
+import { bearerUser } from "./_lib/auth.js";
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
 
-const KEY = "catalog";
-
 export default async function handler(req, res) {
-  if (!bearerOk(req)) {
+  const user = bearerUser(req);
+  if (!user) {
     return res.status(401).json({ error: "unauthorized" });
   }
+  const KEY = `catalog:${user.email}`;
 
   try {
     if (req.method === "GET") {

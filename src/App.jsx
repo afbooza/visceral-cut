@@ -74,6 +74,7 @@ const STORAGE_KEY = "tony-workout-tracker-v2";
 const DRAFT_KEY = "tony-workout-draft";
 const CATALOG_KEY = "tony-workout-catalog";
 const PROGRAM_KEY = "tony-workout-program";
+const ACCOUNT_KEY = "tony-workout-account"; // which account the local data belongs to
 const SESSION_TYPES = ["Push", "Pull", "Legs", "Core"];
 const TYPE_COLORS = { Push: "#c8f060", Pull: "#60c8f0", Legs: "#f0a040", Core: "#d060f0" };
 const SYNC_COLORS = { synced: "#c8f060", pending: "#f0a040", error: "#f06060" };
@@ -95,6 +96,27 @@ function readLocal() {
   try { const c = localStorage.getItem(CATALOG_KEY); if (c) catalog = JSON.parse(c).items || {}; } catch {}
   try { const p = localStorage.getItem(PROGRAM_KEY); if (p) program = JSON.parse(p); } catch {}
   return { logs, draft, catalog, program };
+}
+
+// Local data belongs to one account. If a DIFFERENT Google account signs in on
+// this device, wipe local data first — otherwise syncNow would merge the previous
+// user's history into the new account. Returns true if it wiped.
+// The legacy raw token has no email ("legacy"); it's only ever the owner's, so
+// transitions between it and a signed-in email keep the data.
+function adoptAccount() {
+  const token = getToken();
+  const who = sessionInfo(token)?.email?.toLowerCase() || (token ? "legacy" : null);
+  if (!who) return false; // signed out — keep local-only data
+  let prev = null;
+  try { prev = localStorage.getItem(ACCOUNT_KEY); } catch {}
+  try { localStorage.setItem(ACCOUNT_KEY, who); } catch {}
+  if (prev && prev !== who && prev !== "legacy" && who !== "legacy") {
+    [STORAGE_KEY, DRAFT_KEY, CATALOG_KEY, PROGRAM_KEY].forEach((k) => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+    return true;
+  }
+  return false;
 }
 
 // YYYY-MM-DD in the device's local timezone (toISOString is UTC — after 5-6pm MT it rolls to tomorrow)
@@ -152,6 +174,7 @@ export default function App() {
       alert(`Google sign-in failed: ${decodeURIComponent(location.hash.slice(9))}`);
       history.replaceState(null, "", location.pathname);
     }
+    adoptAccount(); // wipes local data if a different account signed in on this device
     const { logs: local, draft: localDraft, catalog: localCatalog, program: localProgram } = readLocal();
     setLogs(local);
     if (localDraft) setDraft(localDraft);
@@ -945,7 +968,11 @@ export default function App() {
               <input type="text" placeholder="paste token" value={tokenInput} autoCapitalize="none" autoCorrect="off" spellCheck={false}
                 onChange={e => setTokenInput(e.target.value)} style={{ marginBottom: 10 }} />
               <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => { saveToken(tokenInput.trim()); syncNow(); }}>Save & Sync</button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => {
+                  saveToken(tokenInput.trim());
+                  if (adoptAccount()) { setLogs({}); setCatalog({}); setProgram(null); setDraft(null); }
+                  syncNow();
+                }}>Save & Sync</button>
                 <button className="btn btn-ghost" style={{ flex: 1 }} onClick={syncNow} disabled={syncState === "pending"}>Sync Now</button>
               </div>
             </div>

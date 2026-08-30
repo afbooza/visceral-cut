@@ -1,6 +1,6 @@
 import { handleUpload } from "@vercel/blob/client";
 import { del } from "@vercel/blob";
-import { bearerOk, verifyToken } from "./_lib/auth.js";
+import { bearerUser, tokenUser, ownsBlobPath } from "./_lib/auth.js";
 
 export default async function handler(req, res) {
   try {
@@ -11,9 +11,11 @@ export default async function handler(req, res) {
         body: req.body,
         request: req,
         onBeforeGenerateToken: async (pathname, clientPayload) => {
-          if (!verifyToken(clientPayload)) {
-            throw new Error("unauthorized");
-          }
+          const user = tokenUser(clientPayload);
+          if (!user) throw new Error("unauthorized");
+          // Uploads must land in the caller's own videos/<dir>/ (flat legacy
+          // paths stay allowed for the owner, e.g. raw-token devices).
+          if (!ownsBlobPath(pathname, user.email)) throw new Error("forbidden path");
           return {
             allowedContentTypes: ["video/*"],
             maximumSizeInBytes: 200 * 1024 * 1024,
@@ -26,11 +28,17 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "DELETE") {
-      if (!bearerOk(req)) {
+      const user = bearerUser(req);
+      if (!user) {
         return res.status(401).json({ error: "unauthorized" });
       }
       const { url } = req.query;
       if (!url) return res.status(400).json({ error: "url required" });
+      let pathname;
+      try { pathname = new URL(url).pathname; } catch { return res.status(400).json({ error: "invalid url" }); }
+      if (!ownsBlobPath(pathname, user.email)) {
+        return res.status(403).json({ error: "not your file" });
+      }
       await del(url);
       return res.status(200).json({ ok: true });
     }
