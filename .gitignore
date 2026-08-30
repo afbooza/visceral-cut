@@ -6,3 +6,5 @@ dist/
 .DS_Store
 backups/
 .env*.local
+notes.txt
+*.swp
