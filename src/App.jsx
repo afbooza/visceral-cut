@@ -427,7 +427,7 @@ export default function App() {
       {/* Top bar */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: "#0e0e0e", borderBottom: "1px solid #1e1e1e", padding: "env(safe-area-inset-top) 20px 12px", paddingTop: `max(env(safe-area-inset-top), 12px)`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: "0.1em", color: "#c8f060" }}>
-          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : view === "catalog" ? "EXERCISE CATALOG" : view === "settings" ? "SYNC & BACKUP" : "VISCERAL CUT"}
+          {view === "session" && activeSession ? `${activeSession.toUpperCase()} DAY` : view === "edit-session" ? "EDIT SESSION" : view === "catalog" ? "EXERCISE CATALOG" : view === "settings" ? "SYNC & BACKUP" : "VISC"}
         </div>
         {syncState !== "off" && (
           <div style={{ width: 8, height: 8, borderRadius: 4, background: SYNC_COLORS[syncState] || "#555", flexShrink: 0 }} />

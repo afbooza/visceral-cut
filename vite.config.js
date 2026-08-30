@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Visceral Cut',
-        short_name: 'VISCERAL CUT',
+        name: 'Visc',
+        short_name: 'VISC',
         description: 'Workout & readiness tracker',
         theme_color: '#0e0e0e',
         background_color: '#0e0e0e',

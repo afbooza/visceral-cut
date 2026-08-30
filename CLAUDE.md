@@ -15,7 +15,7 @@ No test runner, linter, or formatter is configured.
 
 ## Architecture
 
-**Visceral Cut** is a mobile-first PWA for personal workout and readiness tracking, built with React 18 + Vite.
+**Visc** (formerly Visceral Cut — the repo, Vercel project, and `visceral-cut.vercel.app` domain keep the old name) is a mobile-first PWA for personal workout and readiness tracking, built with React 18 + Vite.
 
 - **Single-component app**: The entire UI lives in `src/App.jsx` (~600 lines). There is no component decomposition, routing library, or state management library.
 - **View switching**: Navigation between views (dashboard, history, schedule, session, settings) is handled via `useState` — no React Router.
