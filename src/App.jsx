@@ -136,6 +136,7 @@ export default function App() {
   const [programDay, setProgramDay] = useState("Push");
   const [uploading, setUploading] = useState(null); // null | percent
   const [playingVideo, setPlayingVideo] = useState(null); // null | url
+  const [reordering, setReordering] = useState(false);
   const draftTimer = useRef(null);
   const fileRef = useRef(null);
 
@@ -313,6 +314,14 @@ export default function App() {
     list.splice(exIdx, 1);
     updateProgramDay(type, list);
     setSwapTarget(null);
+  };
+
+  const moveSlot = (type, exIdx, delta) => {
+    const list = [...getProgram(type)];
+    const j = exIdx + delta;
+    if (j < 0 || j >= list.length) return;
+    [list[exIdx], list[j]] = [list[j], list[exIdx]];
+    updateProgramDay(type, list);
   };
 
   const resetDay = (type) => updateProgramDay(type, WORKOUTS[type].map(ex => ({ ...ex })));
@@ -515,8 +524,10 @@ export default function App() {
 
             {warmupDone && getProgram(activeSession).map((ex, exIdx) => {
               const last = getLastLog(activeSession);
-              // PREV only counts if the same exercise held this slot last time (history is keyed by index)
-              const lastSets = (!last?.names || last.names[exIdx] === ex.name) ? last?.data?.[exIdx] || [] : [];
+              // Logs that record names let PREV follow the exercise by name (survives reorders and swaps);
+              // older logs without names can only match by slot index
+              const lastIdx = last?.names ? last.names.indexOf(ex.name) : exIdx;
+              const lastSets = lastIdx >= 0 ? last?.data?.[lastIdx] || [] : [];
               const hideWeight = ex.type === "bodyweight" || ex.type === "time";
               const repLabel = ex.type === "time" ? "SEC" : "REPS";
               const repPh = ex.type === "time" ? "sec" : "reps";
@@ -695,7 +706,11 @@ export default function App() {
         {/* SCHEDULE */}
         {view === "schedule" && (
           <div>
-            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>PROGRAM</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", letterSpacing: "0.08em" }}>PROGRAM</div>
+              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "4px 10px", ...(reordering ? { color: "#c8f060", borderColor: "#3a4a1a" } : {}) }}
+                onClick={() => setReordering(r => !r)}>{reordering ? "Done" : "↕ Reorder"}</button>
+            </div>
             <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
               {SESSION_TYPES.map(t => (
                 <button key={t} className={`chip ${programDay === t ? "active" : ""}`} onClick={() => setProgramDay(t)}>{t}</button>
@@ -711,7 +726,16 @@ export default function App() {
                     </div>
                     <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>{ex.sets}×{ex.reps}{ex.type === "time" ? "s" : ""}</div>
                   </div>
-                  <button className="btn btn-ghost" style={{ fontSize: 10, padding: "6px 10px", flexShrink: 0 }} onClick={() => setSwapTarget({ type: programDay, exIdx: i })}>⇄ Swap</button>
+                  {reordering ? (
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button className="btn btn-ghost" style={{ fontSize: 12, padding: "6px 12px" }} disabled={i === 0}
+                        onClick={() => moveSlot(programDay, i, -1)}>▲</button>
+                      <button className="btn btn-ghost" style={{ fontSize: 12, padding: "6px 12px" }} disabled={i === arr.length - 1}
+                        onClick={() => moveSlot(programDay, i, 1)}>▼</button>
+                    </div>
+                  ) : (
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: "6px 10px", flexShrink: 0 }} onClick={() => setSwapTarget({ type: programDay, exIdx: i })}>⇄ Swap</button>
+                  )}
                 </div>
               ))}
             </div>
