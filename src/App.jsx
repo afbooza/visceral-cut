@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram, uploadVideo, deleteVideo, isBlobVideo, sessionInfo } from "./sync.js";
+import { getToken, saveToken, fetchLogs, pushLog, pushLogsBulk, removeLog, fetchDraft, pushDraft, clearRemoteDraft, fetchCatalog, pushCatalogItem, pushCatalogBulk, removeCatalogItem, fetchProgram, pushProgram, fetchMembers, approveMember, removeMember, uploadVideo, deleteVideo, isBlobVideo, sessionInfo } from "./sync.js";
 
 const WARMUPS = {
   Push: [
@@ -159,6 +159,7 @@ export default function App() {
   const [uploading, setUploading] = useState(null); // null | percent
   const [playingVideo, setPlayingVideo] = useState(null); // null | url
   const [reordering, setReordering] = useState(false);
+  const [members, setMembers] = useState(null); // null = not owner / not loaded; { email: { status, ts } }
   const draftTimer = useRef(null);
   const fileRef = useRef(null);
 
@@ -169,6 +170,9 @@ export default function App() {
       saveToken(authMatch[1]);
       setTokenInput(authMatch[1]);
       setView("settings");
+      history.replaceState(null, "", location.pathname);
+    } else if (location.hash.startsWith("#pending=")) {
+      alert(`Access requested for ${decodeURIComponent(location.hash.slice(9))}. You'll be able to sign in once the owner approves it — try again then.`);
       history.replaceState(null, "", location.pathname);
     } else if (location.hash.startsWith("#autherr=")) {
       alert(`Google sign-in failed: ${decodeURIComponent(location.hash.slice(9))}`);
@@ -182,6 +186,13 @@ export default function App() {
     if (localProgram) setProgram(localProgram);
     syncNow();
   }, []);
+
+  // Owner-only: load sign-up requests + members when Settings opens. Everyone
+  // else gets a 403 and the card stays hidden.
+  const refreshMembers = () => fetchMembers().then(setMembers).catch(() => setMembers(null));
+  useEffect(() => {
+    if (view === "settings" && getToken()) refreshMembers();
+  }, [view]);
 
   const persist = (l) => localStorage.setItem(STORAGE_KEY, JSON.stringify({ logs: l }));
   const persistCatalog = (c) => { try { localStorage.setItem(CATALOG_KEY, JSON.stringify({ items: c })); } catch {} };
@@ -976,6 +987,31 @@ export default function App() {
                 <button className="btn btn-ghost" style={{ flex: 1 }} onClick={syncNow} disabled={syncState === "pending"}>Sync Now</button>
               </div>
             </div>
+
+            {members && Object.keys(members).length > 0 && (
+              <div className="card" style={{ marginBottom: 12 }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>MEMBERS</div>
+                {Object.entries(members)
+                  .sort(([, a], [, b]) => (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) || (b.ts || 0) - (a.ts || 0))
+                  .map(([email, m]) => (
+                    <div key={email} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: "#ccc", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>
+                        <div style={{ fontSize: 10, color: m.status === "pending" ? "#f0a040" : "#666" }}>{m.status === "pending" ? "wants to join" : "member"}</div>
+                      </div>
+                      {m.status === "pending" && (
+                        <button className="btn btn-primary" style={{ fontSize: 11, padding: "6px 10px", flexShrink: 0 }}
+                          onClick={() => approveMember(email).then(refreshMembers).catch(() => alert("Approve failed — check connection."))}>Approve</button>
+                      )}
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: "6px 10px", color: "#f06060", borderColor: "#3a1a1a", flexShrink: 0 }}
+                        onClick={() => {
+                          if (!confirm(m.status === "pending" ? `Deny ${email}?` : `Remove ${email}? They lose access immediately (their data is kept).`)) return;
+                          removeMember(email).then(refreshMembers).catch(() => alert("Remove failed — check connection."));
+                        }}>✕</button>
+                    </div>
+                  ))}
+              </div>
+            )}
 
             <div className="card" style={{ marginBottom: 12 }}>
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: "#555", marginBottom: 10, letterSpacing: "0.08em" }}>BACKUP</div>

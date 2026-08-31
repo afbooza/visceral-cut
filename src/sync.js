@@ -41,6 +41,12 @@ export const removeCatalogItem = (id) => api(`catalog?id=${encodeURIComponent(id
 export const fetchProgram = () => api("program").then((r) => r.program || null);
 export const pushProgram = (program) => api("program", { method: "POST", body: JSON.stringify({ program }) });
 
+// Member management — owner only; non-owners get a 403 (api-403), which the
+// Settings view uses to hide the Members card.
+export const fetchMembers = () => api("users").then((r) => r.users || {});
+export const approveMember = (email) => api("users", { method: "POST", body: JSON.stringify({ email }) });
+export const removeMember = (email) => api(`users?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+
 // Per-user Blob directory — readable slug + short hash; must match blobDir in
 // api/_lib/auth.js byte-for-byte (the server rejects paths outside your dir).
 async function blobDir(email) {

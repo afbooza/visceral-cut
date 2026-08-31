@@ -5,22 +5,40 @@
 //    the first ALLOWED_EMAIL entry — and rejected when no allowlist is set
 // Every route resolves a token to WHO it belongs to ({ email }), because all
 // data in Redis and Blob is namespaced per user.
+//
+// Signup is self-serve with owner approval: anyone can complete Google OIDC,
+// but unknown emails land as "pending" in the Redis `users` hash and only get
+// a session once the owner approves them (api/users.js). Approval is
+// re-checked on every request, so removing a member locks them out
+// immediately rather than at token expiry.
 import crypto from "crypto";
+import { redis } from "./redis.js";
 
 const sign = (data, secret) => crypto.createHmac("sha256", secret).update(data).digest("base64url");
 
-// ALLOWED_EMAIL is a comma-separated allowlist; empty/unset = open signup.
-// The first entry is the "owner": legacy tokens and pre-multiuser flat blob
-// paths resolve to that account.
+// ALLOWED_EMAIL is a comma-separated list of always-approved emails; the first
+// entry is the "owner": the only admin for api/users.js, and the account that
+// legacy raw tokens and pre-multiuser flat blob paths resolve to. Empty/unset
+// = fully open signup with no approval step (and no working raw token).
 export const allowlist = () =>
   (process.env.ALLOWED_EMAIL || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+
+export const USERS_KEY = "users"; // hash: email -> { status: "pending"|"approved", ts }
+
+export async function isApproved(email) {
+  const list = allowlist();
+  if (list.length === 0 || list.includes(email)) return true;
+  const rec = await redis.hget(USERS_KEY, email);
+  return rec?.status === "approved";
+}
 
 export function mintSession(email, secret, days = 90) {
   const payload = Buffer.from(JSON.stringify({ email, exp: Date.now() + days * 864e5 })).toString("base64url");
   return `v1.${payload}.${sign(payload, secret)}`;
 }
 
-// Verify a bearer token and resolve its account → { email } | null
+// Verify a bearer token's signature/expiry and resolve its account → { email } | null.
+// Does NOT check approval — routes must use approvedTokenUser/requireUser.
 export function tokenUser(token) {
   const secret = process.env.SYNC_TOKEN;
   if (!secret || !token) return null;
@@ -35,16 +53,21 @@ export function tokenUser(token) {
   try {
     const { email, exp } = JSON.parse(Buffer.from(payload, "base64url").toString());
     if (!(exp > Date.now()) || !email) return null;
-    const lower = String(email).toLowerCase();
-    const list = allowlist();
-    if (list.length && !list.includes(lower)) return null;
-    return { email: lower };
+    return { email: String(email).toLowerCase() };
   } catch {
     return null;
   }
 }
 
-export const bearerUser = (req) => tokenUser((req.headers.authorization || "").replace(/^Bearer /, ""));
+// Env-allowlisted emails (the owner included) short-circuit before Redis, so
+// the owner's auth never depends on Redis being up.
+export async function approvedTokenUser(token) {
+  const user = tokenUser(token);
+  if (!user) return null;
+  return (await isApproved(user.email)) ? user : null;
+}
+
+export const requireUser = (req) => approvedTokenUser((req.headers.authorization || "").replace(/^Bearer /, ""));
 
 // Per-user Blob directory — readable slug + short hash so distinct emails can
 // never collide. Mirrored byte-for-byte in src/sync.js (blobDir).

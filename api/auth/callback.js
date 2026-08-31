@@ -1,4 +1,5 @@
-import { mintSession, verifyState, callbackUrl, allowlist } from "../_lib/auth.js";
+import { mintSession, verifyState, callbackUrl, isApproved, USERS_KEY } from "../_lib/auth.js";
+import { redis } from "../_lib/redis.js";
 
 const fail = (res, msg) => res.redirect(302, `/#autherr=${encodeURIComponent(msg)}`);
 
@@ -32,12 +33,13 @@ export default async function handler(req, res) {
     if (!issOk || claims.aud !== GOOGLE_CLIENT_ID || !claims.email || claims.email_verified === false) {
       return fail(res, "invalid Google token");
     }
-    // Empty allowlist = open signup; an account is just a Google email, created
-    // implicitly the first time its data is written.
+    // Self-serve signup: unknown emails are recorded as a pending request for
+    // the owner to approve in Settings, instead of being rejected outright.
     const email = claims.email.toLowerCase();
-    const allowed = allowlist();
-    if (allowed.length && !allowed.includes(email)) {
-      return fail(res, `account ${claims.email} is not allowed`);
+    if (!(await isApproved(email))) {
+      const existing = await redis.hget(USERS_KEY, email);
+      if (!existing) await redis.hset(USERS_KEY, { [email]: { status: "pending", ts: Date.now() } });
+      return res.redirect(302, `/#pending=${encodeURIComponent(email)}`);
     }
     return res.redirect(302, `/#auth=${mintSession(email, SYNC_TOKEN)}`);
   } catch (e) {

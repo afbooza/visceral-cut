@@ -1,6 +1,6 @@
 import { handleUpload } from "@vercel/blob/client";
 import { del } from "@vercel/blob";
-import { bearerUser, tokenUser, ownsBlobPath } from "./_lib/auth.js";
+import { requireUser, approvedTokenUser, ownsBlobPath } from "./_lib/auth.js";
 
 export default async function handler(req, res) {
   try {
@@ -11,7 +11,7 @@ export default async function handler(req, res) {
         body: req.body,
         request: req,
         onBeforeGenerateToken: async (pathname, clientPayload) => {
-          const user = tokenUser(clientPayload);
+          const user = await approvedTokenUser(clientPayload);
           if (!user) throw new Error("unauthorized");
           // Uploads must land in the caller's own videos/<dir>/ (flat legacy
           // paths stay allowed for the owner, e.g. raw-token devices).
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "DELETE") {
-      const user = bearerUser(req);
+      const user = await requireUser(req);
       if (!user) {
         return res.status(401).json({ error: "unauthorized" });
       }
